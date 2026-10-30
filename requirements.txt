@@ -1,0 +1,15 @@
+# Dépendances d'exécution. PyTorch n'est PAS listé ici : install.bat l'installe avant (build CPU ou CUDA,
+# voir tools/install_torch.py). En installation manuelle, lance d'abord : python tools/install_torch.py
+discord.py[voice]
+
+# Fork compatible DAVE (le paquet PyPI officiel ne gère pas la réception audio chiffrée), figé sur un commit.
+# Nécessite git.
+discord-ext-voice-recv @ git+https://github.com/rdphillips7/discord-ext-voice-recv.git@6c090d2
+
+numpy
+whisperx
+webrtcvad-wheels
+reportlab
+google-api-python-client
+google-auth-oauthlib
+google-auth-httplib2

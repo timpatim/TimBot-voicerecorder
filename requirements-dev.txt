@@ -1,0 +1,6 @@
+# Dépendances pour lancer les tests (python -m pytest). Pas besoin de discord, torch ni whisperx :
+# les tests les remplacent par des doublures.
+pytest
+numpy
+reportlab
+webrtcvad-wheels

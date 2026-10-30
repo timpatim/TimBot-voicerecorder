@@ -1,0 +1,24 @@
+# Secrets et configuration locale
+config.ini
+credentials.json
+token.json
+.env
+bot_config.json
+
+# Données produites par le bot (voix = données personnelles)
+sessions/
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+
+# Éditeurs / système
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+.conda_env
