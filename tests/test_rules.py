@@ -111,7 +111,7 @@ def test_cle_lue_dans_l_environnement(tmp_path, monkeypatch):
 class FakeInter:
     def __init__(self):
         self.guild_id, self.sent, self.follow = 1, [], []
-        self.response = types.SimpleNamespace(send_message=self._send, defer=self._defer)
+        self.response = types.SimpleNamespace(send_message=self._send, defer=self._defer, is_done=lambda: hasattr(self, "deferred"))
         self.followup = types.SimpleNamespace(send=self._follow)
 
     async def _send(self, content=None, **kw): self.sent.append((content, kw))

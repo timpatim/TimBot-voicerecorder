@@ -32,10 +32,63 @@ def stats_embed(stats: dict, title: str, pending_s: float = 0.0) -> discord.Embe
     return embed
 
 
-async def _say(inter: discord.Interaction, **kwargs):
+_warned_channels: set = set()
+
+
+def out_channel(inter: discord.Interaction):
+    """Salon dédié aux messages du bot (discord.canal_messages), ou None pour répondre là où la commande est lancée.
+
+    Retombe sur None (avec un avertissement unique en console) si le salon est introuvable ou inaccessible au bot.
+    """
+    raw = SET["discord.canal_messages"].strip()
+    guild = getattr(inter, "guild", None)
+    if not raw or guild is None:
+        return None
+    channel = guild.get_channel(int(raw))
+    problem = None
+    if channel is None or not hasattr(channel, "send"):
+        problem = "introuvable (identifiant erroné, ou salon d'un autre serveur ?)"
+    elif channel.id == getattr(inter, "channel_id", None):
+        return None                              # on est déjà dans le bon salon
+    else:
+        perms = channel.permissions_for(guild.me)
+        if not (perms.view_channel and perms.send_messages):
+            problem = "inaccessible : le bot n'a pas le droit d'y voir le salon ni d'y écrire"
+    if problem:
+        if raw not in _warned_channels:
+            _warned_channels.add(raw)
+            print(f"[bot] salon des messages {raw} {problem} : réponses dans le salon d'origine.")
+        return None
+    return channel
+
+
+async def reply(inter: discord.Interaction, channel, **kwargs):
+    """Publie `kwargs` dans `channel` (salon dédié) ou, sans salon dédié / en cas d'échec, là où la commande a été lancée.
+
+    Dans le cas d'un salon dédié, la personne reçoit une simple confirmation que seule elle voit.
+    """
+    if channel is not None:
+        try:
+            await channel.send(**kwargs)
+        except Exception as e:
+            print(f"[bot] envoi dans {channel!r} impossible ({e!r}), repli sur le salon d'origine")
+        else:
+            note = f"✅ Réponse publiée dans {channel.mention}."
+            if inter.response.is_done():
+                await inter.followup.send(note, ephemeral=True)
+            else:
+                await inter.response.send_message(note, ephemeral=True)
+            return
+    if inter.response.is_done():
+        await inter.followup.send(**kwargs)
+    else:
+        await inter.response.send_message(**kwargs)
+
+
+async def _say(inter: discord.Interaction, channel=None, **kwargs):
     """Message dans le salon (pas d'expiration) ; si le bot ne peut pas y écrire, repli sur la réponse de l'interaction."""
     try:
-        return await inter.channel.send(**kwargs)
+        return await (channel or inter.channel).send(**kwargs)
     except Exception as e:
         print(f"[bot] envoi dans le salon impossible ({e!r}), repli sur la réponse de la commande")
         return await inter.followup.send(wait=True, **kwargs)
@@ -108,7 +161,7 @@ def register(bot, engine, drive):
         while len(text) > 1900 and len(lines) > 1:     # limite Discord : 2000 caractères
             lines.pop(0)
             text = "\n".join(lines)
-        await inter.response.send_message(text[-1900:], allowed_mentions=discord.AllowedMentions.none())
+        await reply(inter, out_channel(inter), content=text[-1900:], allowed_mentions=discord.AllowedMentions.none())
 
 
     last_rule_call: dict = {}                 # serveur -> instant du dernier /regle (anti-abus)
@@ -145,19 +198,21 @@ def register(bot, engine, drive):
                 f"Rien de transcrit pour l'instant.\n`{live.status_line()}`", ephemeral=True)
             return
         last_rule_call[inter.guild_id] = time.monotonic()
-        await inter.response.defer(thinking=True)
+        target = out_channel(inter)
+        await inter.response.defer(thinking=True, ephemeral=target is not None)
         try:
             answer = await asyncio.to_thread(explain_rule, lines, game)
         except RulesError as e:
             last_rule_call.pop(inter.guild_id, None)
-            await inter.followup.send(f"❌ {e}", allowed_mentions=discord.AllowedMentions.none())
+            await inter.followup.send(f"❌ {e}", ephemeral=target is not None,
+                                      allowed_mentions=discord.AllowedMentions.none())
             return
         embed = discord.Embed(title=f"🎲 Règle — {game}"[:256], description=answer[:4000], colour=discord.Colour.blurple())
         quoted = "\n".join(lines)
         embed.add_field(name="Passages analysés", value=discord.utils.escape_markdown(quoted)[-1000:], inline=False)
         embed.set_footer(text="Réponse générée par Gemini à partir d'une transcription automatique : "
                               "à vérifier dans le livre de règles.")
-        await inter.followup.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+        await reply(inter, target, embed=embed, allowed_mentions=discord.AllowedMentions.none())
 
 
     @bot.tree.command(name="stats", description="Statistiques de la session en cours")
@@ -168,11 +223,12 @@ def register(bot, engine, drive):
             await inter.response.send_message("Aucun enregistrement en cours.", ephemeral=True)
             return
         rec, live, _vc = session
-        await inter.response.defer()
+        target = out_channel(inter)
+        await inter.response.defer(ephemeral=target is not None)
         stats = await asyncio.to_thread(session_stats, rec)
-        await inter.followup.send(
-            embed=stats_embed(stats, f"📊 Stats en direct — session {rec.session_id}", live.pending_seconds()),
-            allowed_mentions=discord.AllowedMentions.none())
+        await reply(inter, target,
+                    embed=stats_embed(stats, f"📊 Stats en direct — session {rec.session_id}", live.pending_seconds()),
+                    allowed_mentions=discord.AllowedMentions.none())
 
 
     @bot.tree.command(name="status", description="État de l'enregistrement et de la file de transcription")
@@ -201,10 +257,12 @@ def register(bot, engine, drive):
         cfg = load_config()                    # la config en vigueur au moment de l'arrêt
         vc.stop_listening()
         await vc.disconnect()
-        await inter.followup.send("⏹️ Enregistrement arrêté. Traitement en cours, suivi ci-dessous.")
+        target = out_channel(inter)
+        await inter.followup.send("⏹️ Enregistrement arrêté. Traitement en cours, suivi "
+                                  + (f"dans {target.mention}." if target else "ci-dessous."))
 
         no_mentions = discord.AllowedMentions.none()
-        board = StatusBoard(inter.channel, asyncio.get_running_loop(),
+        board = StatusBoard(target or inter.channel, asyncio.get_running_loop(),
                             f"**Traitement de la session `{rec.session_id}`**", PIPELINE_STEPS, no_mentions)
         for key in ("mp3", "rapport", "drive"):
             if not cfg[key]:
@@ -229,7 +287,7 @@ def register(bot, engine, drive):
         kwargs = {"content": "\n".join(lines), "allowed_mentions": no_mentions}
         if res["stats"]:
             kwargs["embed"] = stats_embed(res["stats"], f"📊 Statistiques — session {rec.session_id}")
-        await _say(inter, **kwargs)
+        await _say(inter, target, **kwargs)
 
 
     @bot.tree.command(name="config", description="Affiche ou modifie la configuration du traitement de fin de session")
@@ -265,5 +323,5 @@ def register(bot, engine, drive):
         save_config(cfg)
         if key == "drive" and cfg["drive"]:
             drive.start()                      # sans effet si déjà démarré
-        await inter.response.send_message(f"⚙️ {inter.user.display_name} a défini `{key}` = **{fmt(cfg[key])}**",
-                                          allowed_mentions=discord.AllowedMentions.none())
+        await reply(inter, out_channel(inter), content=f"⚙️ {inter.user.display_name} a défini `{key}` = **{fmt(cfg[key])}**",
+                    allowed_mentions=discord.AllowedMentions.none())

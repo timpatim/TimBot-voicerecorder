@@ -38,6 +38,11 @@ SETTINGS = [
      "Jeton du bot. Mieux vaut le laisser vide et définir la variable d'environnement DISCORD_TOKEN."),
     ("discord.guild_id", str, "", "DISCORD_GUILD_ID",
      "Identifiant de ton serveur : les commandes apparaissent instantanément (vide = commandes globales, plus lentes)."),
+    ("discord.canal_messages", str, "", None,
+     "Identifiant du salon texte où le bot publie ses messages (suivi du traitement de fin de session, résultats de\n"
+     "/transcript, /regle, /stats, /config). Vide = le salon où la commande est lancée. Pour l'obtenir : Paramètres\n"
+     "Discord > Avancés > Mode développeur, puis clic droit sur le salon > Copier l'identifiant du salon.\n"
+     "Le bot doit pouvoir y voir le salon, écrire et intégrer des liens."),
     ("discord.message_consentement", str,
      "🔴 **Enregistrement en cours** dans {canal}. L'audio de chaque participant et sa transcription sont "
      "conservés. Quitte le canal si tu ne souhaites pas être enregistré. `/stop` pour terminer.", None,
@@ -153,6 +158,7 @@ CHECKS = {   # clé : (test, message)
     "vad.debut_trames_voisees": (lambda v: v >= 1, "attendu : un entier >= 1"),
     "live.retard_alerte_s": (lambda v: v > 0, "attendu : un nombre > 0"),
     "drive.taille_bloc_mo": (lambda v: v >= 1, "attendu : un entier >= 1"),
+    "discord.canal_messages": (lambda v: v == "" or v.isdigit(), "attendu : l'identifiant numérique du salon (ou vide)"),
     "regles.reflexion": (lambda v: v in ("auto", "minimal", "low", "medium", "high"),
                          "attendu : auto, minimal, low, medium ou high"),
     "regles.nb_phrases": (lambda v: 1 <= v <= 50, "attendu : un entier de 1 à 50"),

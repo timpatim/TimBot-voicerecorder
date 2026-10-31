@@ -121,6 +121,17 @@ Sans `credentials.json`, le bot fonctionne normalement : l'étape Drive est simp
 
 Le modèle (`modele`), le niveau de réflexion (`reflexion`, `low` par défaut pour des réponses rapides), la consigne envoyée à Gemini (`instruction`), le jeu par défaut, le nombre de phrases analysées et l'usage de la recherche Google (`recherche_web`) se règlent dans `[regles]`. Les réponses viennent d'un modèle d'IA et d'une transcription automatique : à vérifier dans le livre de règles.
 
+### Un salon dédié pour les messages du bot (optionnel)
+
+Pour ne pas polluer le salon principal : créez un salon texte (ex. `#bot-enregistrements`), activez le mode développeur de Discord (Paramètres → Avancés), faites clic droit sur le salon → *Copier l'identifiant du salon*, puis renseignez-le dans `config.ini` :
+
+```ini
+[discord]
+canal_messages = 123456789012345678
+```
+
+Le bot doit avoir les droits *Voir le salon*, *Envoyer des messages* et *Intégrer des liens* dans ce salon. Il y publie le suivi du traitement de fin de session et les résultats de `/transcript`, `/regle`, `/stats` et `/config` ; la personne qui lance la commande reçoit seulement une confirmation que seule elle voit. Le message de consentement de `/record` reste dans le salon où la commande est lancée, pour que les participants le voient. Si le salon est introuvable ou inaccessible, le bot répond là où la commande a été lancée, avec un avertissement dans la console.
+
 ### 5. Lancer
 
 ```bat
@@ -149,7 +160,7 @@ Au premier lancement, `config.ini` est créé avec les valeurs par défaut et to
 
 | Section | Contenu |
 |---|---|
-| `[discord]` | token, serveur de synchronisation |
+| `[discord]` | token, serveur de synchronisation, salon dédié aux messages du bot (`canal_messages`), message de consentement |
 | `[sessions]` | dossier de sortie |
 | `[audio]` | tolérance de gigue, rythme d'écriture |
 | `[vad]` | agressivité, pré-roll, silence de fin, durée max, **`niveau_min_dbfs`** |
