@@ -17,7 +17,7 @@ def install():
     d.Intents = types.SimpleNamespace(default=lambda: object())
     d.Interaction = type("Interaction", (), {})
     d.Embed = type("Embed", (), {
-        "__init__": lambda s, **k: setattr(s, "fields", []),
+        "__init__": lambda s, **k: [s.__dict__.update(k), setattr(s, "fields", [])] and None,
         "add_field": lambda s, **k: s.fields.append(k),
         "set_footer": lambda s, **k: None})
     d.Colour = types.SimpleNamespace(blurple=lambda: 0)

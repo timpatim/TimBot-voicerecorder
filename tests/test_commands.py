@@ -14,7 +14,7 @@ def build():
 
 def test_commandes_declarees():
     bot, _ = build()
-    assert set(bot.tree.commands) == {"record", "stop", "transcript", "stats", "status", "config"}
+    assert set(bot.tree.commands) == {"record", "stop", "transcript", "regle", "stats", "status", "config"}
     assert bot.tree.error_handler is not None
 
 

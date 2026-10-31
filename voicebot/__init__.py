@@ -14,6 +14,7 @@ Dépendances (chaque module ne dépend que de ceux qui le précèdent) :
     report        rapport PDF
     mp3           conversion MP3 (ffmpeg)
     drive         Google Drive
+    rules         questions de règles (Google Gemini)
     pipeline      traitement de fin de session + suivi dans le chat
     client        client Discord (sessions, statut de présence)
     commands      commandes slash

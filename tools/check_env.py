@@ -95,6 +95,17 @@ def main() -> int:
         report(OK if creds.exists() or Path(SET["drive.jeton"]).exists() else WARN, f"{creds} (Google Drive)",
                "voir README, section Google Drive ; ou désactive l'étape : drive = non")
 
+    # --- commande /regle (Google Gemini)
+    try:
+        if SET["regles.activer"]:
+            g = try_import("google.genai")
+            report(OK if not isinstance(g, Exception) else WARN, "bibliothèque google-genai (/regle)",
+                   "pip install google-genai, ou désactive la commande : activer = non dans [regles]")
+            report(OK if SET["regles.cle_api"] else WARN, "clé d'API Gemini (/regle)",
+                   "définis GEMINI_API_KEY (https://aistudio.google.com/apikey), ou désactive : activer = non dans [regles]")
+    except NameError:
+        pass
+
     # --- jeton Discord
     try:
         has_token = bool(SET["discord.token"])

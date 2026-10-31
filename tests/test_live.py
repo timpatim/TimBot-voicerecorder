@@ -119,3 +119,27 @@ def test_whisper_engine_echec_de_chargement(monkeypatch, fake_whisperx):
     e.start_loading()
     assert not e.wait_ready() and e.failed and "CUDA" in str(e.error)
     assert wait_until(lambda: e.state == "failed")
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("Merci.", True), ("merci", True), ("  MERCI !  ", True), ("Merci, merci, merci...", True),
+    ("Merci beaucoup.", False), ("Merci Tim", False), ("Non merci", False), ("Mercier arrive", False)])
+def test_mot_seul_ignore(text, expected, cfg_file):
+    assert is_hallucination(text) is expected
+
+
+def test_liste_de_mots_configurable(cfg_file, monkeypatch):
+    from voicebot.config import SET
+    monkeypatch.setitem(SET.values, "whisper.mots_seuls_ignores", "merci, ok  ouais")
+    assert is_hallucination("Ok, ouais, merci.") and not is_hallucination("Ok pas de souci")
+    monkeypatch.setitem(SET.values, "whisper.mots_seuls_ignores", "")
+    assert not is_hallucination("Merci.")
+
+
+def test_merci_seul_range_dans_les_rejetes(tmp_path, energy_vad, cfg_file):
+    energy_vad(400)
+    script = [[{"text": " Merci.", "start": 0.0, "end": 0.5}, {"text": " Allez, on y va.", "start": 0.6, "end": 1.4}]]
+    _, rows = run(tmp_path, script, [(1, 2.0, 1.5, 3000)])
+    assert [r["text"] for r in rows] == ["Allez, on y va."]
+    rejected = [json.loads(x) for x in (tmp_path / "transcript_live_rejected.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert [(r["text"], r["reason"]) for r in rejected] == [("Merci.", "mot isolé ignoré")]

@@ -1,5 +1,6 @@
-"""Commandes slash du bot : /record, /stop, /transcript, /stats, /status, /config."""
+"""Commandes slash du bot : /record, /stop, /transcript, /regle, /stats, /status, /config."""
 import asyncio
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -13,7 +14,9 @@ from .config import CONFIG_SPEC, SET, load_config, parse_config_value, save_conf
 from .constants import RATE
 from .live import LiveTranscriber
 from .pipeline import PIPELINE_STEPS, StatusBoard, run_pipeline
+from .rules import RulesError, api_key, explain_rule, transcript_lines
 from .stats import render_sections, session_stats
+from .transcript import read_rows
 from .utils import fmt_ts
 
 
@@ -106,6 +109,55 @@ def register(bot, engine, drive):
             lines.pop(0)
             text = "\n".join(lines)
         await inter.response.send_message(text[-1900:], allowed_mentions=discord.AllowedMentions.none())
+
+
+    last_rule_call: dict = {}                 # serveur -> instant du dernier /regle (anti-abus)
+
+    @bot.tree.command(name="regle", description="Demande à Gemini d'expliquer la règle évoquée dans les dernières phrases")
+    @app_commands.guild_only()
+    @app_commands.describe(jeu="Jeu concerné (défaut : celui défini dans config.ini, Pathfinder première édition)",
+                           phrases="Nombre de dernières phrases à analyser (défaut : config.ini)")
+    async def regle(inter: discord.Interaction, jeu: Optional[str] = None,
+                    phrases: Optional[app_commands.Range[int, 1, 50]] = None):
+        if not SET["regles.activer"]:
+            await inter.response.send_message("La commande /regle est désactivée (`activer = non` dans config.ini).",
+                                              ephemeral=True)
+            return
+        if not api_key():
+            await inter.response.send_message(
+                "Aucune clé d'API Gemini configurée : définis `GEMINI_API_KEY` (voir le README).", ephemeral=True)
+            return
+        session = bot.sessions.get(inter.guild_id)
+        if session is None:
+            await inter.response.send_message("Aucun enregistrement en cours.", ephemeral=True)
+            return
+        wait = SET["regles.delai_min_s"] - (time.monotonic() - last_rule_call.get(inter.guild_id, -1e9))
+        if wait > 0:
+            await inter.response.send_message(f"Patiente encore {wait:.0f} s avant de redemander une règle.",
+                                              ephemeral=True)
+            return
+        rec, live, _vc = session
+        game = (jeu or "").strip() or SET["regles.jeu_par_defaut"]
+        rows = await asyncio.to_thread(read_rows, rec.dir / "transcript_live.jsonl")
+        lines = transcript_lines(rows, phrases or SET["regles.nb_phrases"])
+        if not lines:
+            await inter.response.send_message(
+                f"Rien de transcrit pour l'instant.\n`{live.status_line()}`", ephemeral=True)
+            return
+        last_rule_call[inter.guild_id] = time.monotonic()
+        await inter.response.defer(thinking=True)
+        try:
+            answer = await asyncio.to_thread(explain_rule, lines, game)
+        except RulesError as e:
+            last_rule_call.pop(inter.guild_id, None)
+            await inter.followup.send(f"❌ {e}", allowed_mentions=discord.AllowedMentions.none())
+            return
+        embed = discord.Embed(title=f"🎲 Règle — {game}"[:256], description=answer[:4000], colour=discord.Colour.blurple())
+        quoted = "\n".join(lines)
+        embed.add_field(name="Passages analysés", value=discord.utils.escape_markdown(quoted)[-1000:], inline=False)
+        embed.set_footer(text="Réponse générée par Gemini à partir d'une transcription automatique : "
+                              "à vérifier dans le livre de règles.")
+        await inter.followup.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
 
 
     @bot.tree.command(name="stats", description="Statistiques de la session en cours")

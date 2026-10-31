@@ -29,6 +29,7 @@ SECTION_TITLES = {
     "fin_de_session": "Traitement de fin de session (modifiable avec /config pour les étapes)",
     "mp3": "Conversion MP3",
     "drive": "Google Drive",
+    "regles": "Questions de règles (commande /regle, Google Gemini)",
 }
 
 # (section.clé, type, défaut, ancienne variable d'environnement, description)
@@ -67,6 +68,9 @@ SETTINGS = [
     ("whisper.alignement", bool, True, "WHISPERX_ALIGN", "Alignement mot à mot : timestamps plus précis, un peu plus lent."),
     ("whisper.filtre_hallucinations", str, DEFAULT_HALLUCINATIONS, None,
      "Expression régulière : les segments qui la contiennent sont rejetés (sous-titres inventés sur du silence)."),
+    ("whisper.mots_seuls_ignores", str, "merci", None,
+     "Mots (séparés par des virgules ou des espaces) : une phrase qui ne contient QUE ces mots, éventuellement répétés\n"
+     "(« Merci. », « merci, merci ! »), est rejetée comme bruit. « Merci beaucoup » est conservé. Vide = rien d'ignoré."),
     ("live.debug", bool, False, "LIVE_DEBUG", "Trace chaque énoncé (durée, niveau, décision) pour régler les seuils."),
     ("live.statut_console_s", float, 10.0, "LIVE_STATUS_INTERVAL",
      "Secondes entre deux lignes de suivi en console pendant un REC (0 = seulement les changements d'état)."),
@@ -106,6 +110,34 @@ SETTINGS = [
     ("drive.dossier_racine", str, "Enregistrements Discord", "DRIVE_ROOT_NAME", "Dossier racine sur le Drive."),
     ("drive.attente_connexion_s", int, 180, None, "Attente maximale (s) de la connexion Google avant échec de l'étape."),
     ("drive.taille_bloc_mo", int, 8, None, "Taille des blocs d'envoi (Mo)."),
+    ("regles.activer", bool, True, None, "Active la commande /regle."),
+    ("regles.cle_api", str, "", "GEMINI_API_KEY",
+     "Clé d'API Google Gemini (https://aistudio.google.com/apikey). Mieux vaut la laisser vide\n"
+     "et définir la variable d'environnement GEMINI_API_KEY."),
+    ("regles.modele", str, "gemini-3.8-flash", None,
+     "Modèle Gemini. « gemini-flash-latest » suit automatiquement la dernière version Flash."),
+    ("regles.jeu_par_defaut", str, "Pathfinder première édition", None,
+     "Jeu utilisé quand /regle est lancée sans préciser le jeu."),
+    ("regles.nb_phrases", int, 15, None, "Nombre de dernières phrases du transcript envoyées à Gemini (1 à 50)."),
+    ("regles.temperature", float, 0.2, None, "Créativité de la réponse (0 = très factuel, 2 = très libre)."),
+    ("regles.reflexion", str, "low", None,
+     "Niveau de « réflexion » de Gemini 3.x : low (rapide, recommandé), medium, high (plus lent, souvent plusieurs\n"
+     "dizaines de secondes), minimal (pas toujours accepté), auto (ne rien envoyer : valeur par défaut du modèle,\n"
+     "à utiliser avec un modèle qui ne gère pas ce réglage, comme gemini-2.5-flash)."),
+    ("regles.recherche_web", bool, False, None,
+     "Autorise Gemini à s'appuyer sur la recherche Google pour vérifier la règle (plus fiable, plus lent)."),
+    ("regles.delai_attente_s", int, 60, None, "Temps maximal d'attente de la réponse de Gemini (s)."),
+    ("regles.delai_min_s", int, 10, None, "Délai minimal (s) entre deux /regle sur un même serveur (évite les abus)."),
+    ("regles.instruction", str,
+     "Tu es arbitre et expert des règles du jeu « {jeu} ». Tu reçois les dernières phrases échangées à l'oral par "
+     "des joueurs autour de la table (transcription automatique : erreurs, noms propres déformés, phrases coupées "
+     "possibles). Repère le point de règle dont ils parlent ou sur lequel ils hésitent, puis : 1) formule-le en une "
+     "phrase ; 2) explique la règle précisément, avec conditions, exceptions et cas limites utiles ; 3) tranche le cas "
+     "concret évoqué s'il y en a un ; 4) cite la source (livre, chapitre) seulement si tu en es sûr. Si tu n'es pas "
+     "certain, ou si plusieurs interprétations existent (errata, différences entre éditions, règle optionnelle), dis-le "
+     "clairement plutôt que d'inventer. Réponds en français, de façon concise (moins de 1500 caractères), sans "
+     "introduction ni formule de politesse. Si aucune question de règle ne ressort, dis-le en une phrase.", None,
+     "Consigne envoyée à Gemini. {jeu} est remplacé par le nom du jeu. Doit tenir sur une seule ligne."),
 ]
 SPEC = {s[0]: s for s in SETTINGS}
 
@@ -121,6 +153,14 @@ CHECKS = {   # clé : (test, message)
     "vad.debut_trames_voisees": (lambda v: v >= 1, "attendu : un entier >= 1"),
     "live.retard_alerte_s": (lambda v: v > 0, "attendu : un nombre > 0"),
     "drive.taille_bloc_mo": (lambda v: v >= 1, "attendu : un entier >= 1"),
+    "regles.reflexion": (lambda v: v in ("auto", "minimal", "low", "medium", "high"),
+                         "attendu : auto, minimal, low, medium ou high"),
+    "regles.nb_phrases": (lambda v: 1 <= v <= 50, "attendu : un entier de 1 à 50"),
+    "regles.temperature": (lambda v: 0 <= v <= 2, "attendu : un nombre de 0 à 2"),
+    "regles.delai_attente_s": (lambda v: v >= 5, "attendu : un entier >= 5"),
+    "regles.delai_min_s": (lambda v: v >= 0, "attendu : un entier >= 0"),
+    "regles.jeu_par_defaut": (lambda v: bool(v), "ne peut pas être vide"),
+    "regles.modele": (lambda v: bool(v), "ne peut pas être vide"),
     "live.historique": (lambda v: v >= 1, "attendu : un entier >= 1"),
     "whisper.filtre_hallucinations": (lambda v: bool(re.compile(v)) or True, "expression régulière invalide"),
 }
@@ -131,7 +171,7 @@ def parse_setting(key: str, raw):
     typ = SPEC[key][1]
     if typ is str:
         v = str(raw).strip()
-        if key == "fin_de_session.partage":
+        if key in ("fin_de_session.partage", "regles.reflexion"):
             v = v.lower()
     else:
         r = str(raw).strip().lower()

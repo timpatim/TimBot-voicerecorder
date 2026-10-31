@@ -22,9 +22,23 @@ LIVE_DEBUG = SET["live.debug"]           # trace chaque énoncé (durée, niveau
 _HALLUCINATION = re.compile(SET["whisper.filtre_hallucinations"], re.IGNORECASE)
 
 
+def _solo_words() -> set:
+    return {w for w in re.split(r"[,\s;]+", SET["whisper.mots_seuls_ignores"].lower()) if w}
+
+
+def rejection_reason(text: str):
+    """Pourquoi ce segment doit être écarté du transcript, ou None s'il est à garder."""
+    if not re.search(r"\w", text) or _HALLUCINATION.search(text):
+        return "hallucination probable"          # ponctuation seule ('...') ou formule de sous-titrage typique
+    words = re.findall(r"\w+", text.lower())
+    solo = _solo_words()
+    if solo and words and all(w in solo for w in words):
+        return "mot isolé ignoré"                # ex. « Merci. » : bruit dans 90 % des cas, sans intérêt
+    return None
+
+
 def is_hallucination(text: str) -> bool:
-    """Texte vide de sens : ponctuation seule ('...') ou formule de sous-titrage typique."""
-    return not re.search(r"\w", text) or bool(_HALLUCINATION.search(text))
+    return rejection_reason(text) is not None
 
 
 class LiveTranscriber:
@@ -247,12 +261,17 @@ class LiveTranscriber:
             s1 = min(max(float(s.get("end", duration)), s0), duration)
             row = {"user": str(uid), "name": name, "start": round(base + s0, 3),
                    "end": round(base + s1, 3), "text": text, "source": "live"}
-            (rejected if is_hallucination(text) else rows).append(row)
+            reason = rejection_reason(text)
+            if reason:
+                row["reason"] = reason
+                rejected.append(row)
+            else:
+                rows.append(row)
         if rejected:                   # gardés à part (rien n'est perdu), mais hors du transcript
             with open(self.jsonl.with_name("transcript_live_rejected.jsonl"), "a", encoding="utf-8") as f:
                 for r in rejected:
-                    f.write(json.dumps({**r, "reason": "hallucination probable"}, ensure_ascii=False) + "\n")
-                    print(f"[live] rejeté (hallucination probable) {fmt_ts(r['start'])} {name} : {r['text']!r}")
+                    f.write(json.dumps(r, ensure_ascii=False) + "\n")
+                    print(f"[live] rejeté ({r['reason']}) {fmt_ts(r['start'])} {name} : {r['text']!r}")
         if not rows:
             return
         with open(self.jsonl, "a", encoding="utf-8") as f:

@@ -22,6 +22,7 @@ puis livre MP3, transcript, rapport PDF et lien de partage Google Drive.**
 - **Surveillance de la file d'attente** ASR (barre dans la console et dans `/status`) pour voir si WhisperX prend du retard.
 - **Fin de session automatisée** : MP3, statistiques (et palmarès amusant), rapport PDF, dépôt sur Google Drive, lien de partage. Chaque étape est **activable ou non** et son statut s'affiche dans le chat.
 - **Tout est configurable** dans un seul `config.ini`, modifiable aussi depuis Discord avec `/config`.
+- **Arbitrage de règles** : `/regle` envoie les dernières phrases à Google Gemini, qui explique ou précise le point de règle évoqué (jeu au choix, Pathfinder première édition par défaut).
 - **Aucun message de transcription publié automatiquement** : `/transcript` affiche les derniers échanges, à la demande, pour tout le monde.
 - Architecture modulaire (un fichier par composant) et suite de tests sans GPU ni connexion.
 
@@ -54,6 +55,7 @@ flowchart LR
 | Pilote NVIDIA à jour | ❌ manuel | pour utiliser le GPU |
 | CUDA Toolkit 12.8 | ❌ manuel, parfois utile | recommandé par WhisperX pour le GPU ; si cuDNN/ctranslate2 se plaint |
 | Application Discord + token | ❌ manuel | voir ci-dessous |
+| Clé d'API Gemini | ❌ manuel, optionnel | seulement pour `/regle` |
 | Identifiants Google (`credentials.json`) | ❌ manuel, optionnel | seulement pour l'envoi sur Drive |
 
 ## 🚀 Installation rapide (Windows)
@@ -79,6 +81,8 @@ Oui, c'est automatisé. Sur Windows, `pip install torch` depuis PyPI donne une v
 | ≥ 12.8 (ou 13.x) | `cu128` |
 | 12.6 – 12.7 | `cu126` |
 | plus ancien / pas de GPU | `cpu` |
+
+Si la détection échoue (ou conclut à `cpu`), l'installeur affiche un **menu** pour choisir le build à la main (CPU / CUDA 12.6 / CUDA 12.8 ; Entrée = valeur proposée). Pour ne jamais poser de question, par exemple en automatisation : `python tools/install_torch.py --no-prompt`.
 
 Version épinglée : `torch==2.8.*` (exigée par WhisperX). Pour voir la commande sans l'exécuter : `python tools/install_torch.py --dry-run`.
 
@@ -109,7 +113,15 @@ En mode « Test », le jeton expire au bout de 7 jours : supprimez `token.json` 
 
 Sans `credentials.json`, le bot fonctionne normalement : l'étape Drive est simplement signalée comme indisponible.
 
-### 4. Lancer
+### 4. Gemini pour `/regle` (optionnel)
+
+1. Créez une clé sur [Google AI Studio](https://aistudio.google.com/apikey).
+2. Définissez-la : `setx GEMINI_API_KEY "votre_cle"` (puis nouveau terminal), ou `cle_api` dans la section `[regles]` de `config.ini`.
+3. Sans clé, le bot fonctionne normalement : `/regle` répond simplement qu'elle n'est pas configurée.
+
+Le modèle (`modele`), le niveau de réflexion (`reflexion`, `low` par défaut pour des réponses rapides), la consigne envoyée à Gemini (`instruction`), le jeu par défaut, le nombre de phrases analysées et l'usage de la recherche Google (`recherche_web`) se règlent dans `[regles]`. Les réponses viennent d'un modèle d'IA et d'une transcription automatique : à vérifier dans le livre de règles.
+
+### 5. Lancer
 
 ```bat
 run.bat
@@ -124,6 +136,7 @@ Le modèle Whisper se charge dès le démarrage (état visible dans la console e
 | `/record` | Rejoint votre salon vocal et démarre l'enregistrement (avec message de consentement) |
 | `/stop` | Arrête et lance le traitement de fin de session |
 | `/transcript [nombre]` | Affiche les derniers messages transcrits, visibles de tous |
+| `/regle [jeu] [phrases]` | Envoie les dernières phrases du transcript à Gemini pour expliquer/préciser la règle évoquée. `jeu` : défaut *Pathfinder première édition* ; `phrases` : défaut 15 |
 | `/stats` | Statistiques de la session en cours |
 | `/status` | État de Whisper, de Drive et de la file d'attente |
 | `/config` | Affiche/modifie les étapes de fin de session (permission *Gérer le serveur*) |
@@ -140,13 +153,14 @@ Au premier lancement, `config.ini` est créé avec les valeurs par défaut et to
 | `[sessions]` | dossier de sortie |
 | `[audio]` | tolérance de gigue, rythme d'écriture |
 | `[vad]` | agressivité, pré-roll, silence de fin, durée max, **`niveau_min_dbfs`** |
-| `[whisper]` | modèle, device, type de calcul, langue, filtre d'hallucinations |
+| `[whisper]` | modèle, device, type de calcul, langue, filtre d'hallucinations, mots isolés ignorés (« merci ») |
 | `[live]` | rafraîchissement de la console, seuil d'alerte de file |
 | `[stats]` | palmarès, mots exclus |
 | `[rapport]` | options du PDF |
 | `[fin_de_session]` | étapes activées : `mp3`, `rapport`, `drive`, `drive_audio`, `partage` |
 | `[mp3]` | débit, chemin de ffmpeg |
 | `[drive]` | identifiants, jeton, dossier racine |
+| `[regles]` | commande `/regle` : clé Gemini, modèle, jeu par défaut, nombre de phrases, consigne |
 
 Les étapes de `[fin_de_session]` sont relues à chaque `/stop`, sans redémarrer.
 
@@ -181,7 +195,7 @@ sessions/2026-10-30_120000/
 
 ## ⚖️ Vie privée et consentement
 
-Le bot enregistre la voix de personnes identifiables et en conserve la transcription. Informez les participants, obtenez leur accord et respectez la réglementation applicable (RGPD en Europe, règles de Discord). `/record` publie un message d'information dans le salon ; le partage Drive par lien rend les fichiers accessibles à quiconque possède le lien — désactivez `partage` si besoin.
+Le bot enregistre la voix de personnes identifiables et en conserve la transcription. Informez les participants, obtenez leur accord et respectez la réglementation applicable (RGPD en Europe, règles de Discord). `/record` publie un message d'information dans le salon ; `/regle` transmet à Google (Gemini) les dernières phrases transcrites, nominativement ; le partage Drive par lien rend les fichiers accessibles à quiconque possède le lien — désactivez `partage` si besoin.
 
 ## 🛠️ Développement
 
@@ -208,6 +222,7 @@ voicebot/
 ├── report.py        # PDF
 ├── mp3.py           # conversion ffmpeg
 ├── drive.py         # Google Drive
+├── rules.py         # /regle : questions de règles via Gemini
 ├── pipeline.py      # étapes de fin de session + statut dans le chat
 ├── client.py        # client Discord, statut
 └── commands.py      # commandes slash
