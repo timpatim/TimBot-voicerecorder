@@ -155,6 +155,19 @@ def test_commande_jeu_par_defaut(bot_with_session, key, monkeypatch):
     assert "Pathfinder première édition" in fake.calls[0]["config"].system_instruction
 
 
+def test_regle_prend_le_jeu_de_la_campagne_en_cours(bot_with_session, key, monkeypatch, tmp_path):
+    from voicebot.campagne import CampaignStore
+    monkeypatch.setitem(SET.values, "campagnes.dossier", str(tmp_path / "camp"))
+    monkeypatch.setitem(SET.values, "regles.delai_min_s", 0)
+    CampaignStore(tmp_path / "camp").create("Rebelles", "Starfinder", {}, [])
+    fake = FakeGenai(monkeypatch)
+    run(bot_with_session)
+    assert "Starfinder" in fake.calls[0]["config"].system_instruction
+    fake2 = FakeGenai(monkeypatch)
+    run(bot_with_session, jeu="D&D 5e")                                       # le paramètre prime
+    assert "D&D 5e" in fake2.calls[0]["config"].system_instruction
+
+
 def test_commande_anti_rafale(bot_with_session, key, monkeypatch):
     FakeGenai(monkeypatch)
     bot = bot_with_session

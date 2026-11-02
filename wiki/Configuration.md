@@ -177,8 +177,8 @@ automatiquement ; une valeur invalide retombe sur le défaut avec un avertisseme
 |---|---|---|---|---|
 | `activer` | oui / non | `oui` |  | Active la commande /regle. |
 | `cle_api` | texte | *(vide)* |  | Clé d'API Google Gemini (https://aistudio.google.com/apikey). Mieux vaut la laisser vide et définir la variable d'environnement GEMINI_API_KEY. (variable d'environnement : `GEMINI_API_KEY`) |
-| `modele` | texte | `gemini-3.8-flash` | ne peut pas être vide | Modèle Gemini. « gemini-flash-latest » suit automatiquement la dernière version Flash. |
-| `jeu_par_defaut` | texte | `Pathfinder première édition` | ne peut pas être vide | Jeu utilisé quand /regle est lancée sans préciser le jeu. |
+| `modele` | texte | `gemini-3.6-flash` | ne peut pas être vide | Modèle Gemini. « gemini-flash-latest » suit automatiquement la dernière version Flash. |
+| `jeu_par_defaut` | texte | `Pathfinder première édition` | ne peut pas être vide | Jeu de repli : utilisé par /regle quand elle est lancée sans préciser le jeu et qu'aucune campagne n'est active (sinon /regle prend le jeu de la campagne en cours), et pour une nouvelle campagne créée sans jeu. |
 | `nb_phrases` | entier | `15` | un entier de 1 à 50 | Nombre de dernières phrases du transcript envoyées à Gemini (1 à 50). |
 | `temperature` | nombre | `0.2` | un nombre de 0 à 2 | Créativité de la réponse (0 = très factuel, 2 = très libre). |
 | `reflexion` | texte | `low` | auto, minimal, low, medium ou high | Niveau de « réflexion » de Gemini 3.x : low (rapide, recommandé), medium, high (plus lent, souvent plusieurs dizaines de secondes), minimal (pas toujours accepté), auto (ne rien envoyer : valeur par défaut du modèle, à utiliser avec un modèle qui ne gère pas ce réglage, comme gemini-2.5-flash). |
@@ -216,6 +216,6 @@ automatiquement ; une valeur invalide retombe sur le défaut avec un avertisseme
 | `device` | texte | *(vide)* | cuda, cpu ou vide | cuda ou cpu (vide = automatique). |
 | `vitesse` | nombre | `1.15` | un nombre de 0.5 à 2.0 | Vitesse de lecture (1.0 = normale, 1.15 = un peu plus rapide). Appliquée sans changer la hauteur de la voix. Entre 0.5 et 2.0. |
 | `pause_s` | nombre | `0.25` | un nombre de 0 à 3 | Silence (s) entre deux morceaux de texte (avant accélération). |
-| `temperature` | nombre | `0.8` | un nombre de 0.1 à 1.5 | Variabilité de la synthèse (0.8 = défaut de Chatterbox). Si la voix produit des mots farfelus ou des bruits, essaie 0.6 ; trop bas, elle devient monotone. Sinon, relance avec /campagne audio force. |
+| `temperature` | nombre | `0.6` | un nombre de 0.1 à 1.5 | Variabilité de la synthèse (0.8 = défaut de Chatterbox). 0.6 limite les mots farfelus et les bruits ; trop bas, la voix devient monotone. Si un audio est raté, relance avec /campagne audio force. |
 | `mots` | entier | `110` | un entier de 30 à 400 | Longueur visée (en mots) du « précédemment » demandé à l'IA dans les prompts. ~110 mots = environ 40 s à voix haute. Ne change pas un texte déjà écrit. |
 | `delai_s` | entier | `900` | un entier >= 30 | Temps maximal (s) d'une synthèse vocale. |

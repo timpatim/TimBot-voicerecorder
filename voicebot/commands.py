@@ -105,6 +105,15 @@ def campaign_store() -> CampaignStore:
     return CampaignStore(Path(SET["campagnes.dossier"]))
 
 
+def campaign_game() -> str:
+    """Jeu de la campagne en cours (vide s'il n'y en a pas ou si elle n'en précise pas)."""
+    try:
+        c = campaign_store().active()
+    except CampaignError:
+        return ""
+    return (c.jeu or "").strip() if c else ""
+
+
 def _member_info(m) -> dict:
     return {"id": m.id, "name": getattr(m, "display_name", None), "username": getattr(m, "name", None)}
 
@@ -366,7 +375,7 @@ def register(bot, engine, drive):
                                               ephemeral=True)
             return
         rec, live, _vc = session
-        game = (jeu or "").strip() or SET["regles.jeu_par_defaut"]
+        game = (jeu or "").strip() or campaign_game() or SET["regles.jeu_par_defaut"]
         rows = await asyncio.to_thread(read_rows, rec.dir / "transcript_live.jsonl")
         lines = transcript_lines(rows, phrases or SET["regles.nb_phrases"])
         if not lines:

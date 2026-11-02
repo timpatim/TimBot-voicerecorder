@@ -74,7 +74,7 @@ commande est le seul moyen de les voir pendant la session.
 
 | Paramètre | Rôle | Défaut |
 |---|---|---|
-| `jeu` | Jeu concerné | `jeu_par_defaut` de [`[regles]`](Configuration#regles) (Pathfinder première édition) |
+| `jeu` | Jeu concerné | le jeu de la campagne en cours ; sans campagne, `jeu_par_defaut` de [`[regles]`](Configuration#regles) (Pathfinder première édition) |
 | `phrases` | Nombre de dernières phrases à analyser (1 à 50) | `nb_phrases` (15) |
 
 Envoie les dernières phrases du transcript à **Google Gemini**, qui explique ou précise la règle évoquée. Nécessite une

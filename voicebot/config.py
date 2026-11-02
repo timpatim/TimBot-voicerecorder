@@ -141,9 +141,9 @@ SETTINGS = [
      "Vitesse de lecture (1.0 = normale, 1.15 = un peu plus rapide). Appliquée sans changer la hauteur de la voix. "
      "Entre 0.5 et 2.0."),
     ("voix.pause_s", float, 0.25, None, "Silence (s) entre deux morceaux de texte (avant accélération)."),
-    ("voix.temperature", float, 0.8, None,
-     "Variabilité de la synthèse (0.8 = défaut de Chatterbox). Si la voix produit des mots farfelus ou des bruits, "
-     "essaie 0.6 ; trop bas, elle devient monotone. Sinon, relance avec /campagne audio force."),
+    ("voix.temperature", float, 0.6, None,
+     "Variabilité de la synthèse (0.8 = défaut de Chatterbox). 0.6 limite les mots farfelus et les bruits ; "
+     "trop bas, la voix devient monotone. Si un audio est raté, relance avec /campagne audio force."),
     ("voix.mots", int, 110, None,
      "Longueur visée (en mots) du « précédemment » demandé à l'IA dans les prompts. ~110 mots = environ 40 s à voix haute. "
      "Ne change pas un texte déjà écrit."),
@@ -167,10 +167,11 @@ SETTINGS = [
     ("regles.cle_api", str, "", "GEMINI_API_KEY",
      "Clé d'API Google Gemini (https://aistudio.google.com/apikey). Mieux vaut la laisser vide\n"
      "et définir la variable d'environnement GEMINI_API_KEY."),
-    ("regles.modele", str, "gemini-3.8-flash", None,
+    ("regles.modele", str, "gemini-3.6-flash", None,
      "Modèle Gemini. « gemini-flash-latest » suit automatiquement la dernière version Flash."),
     ("regles.jeu_par_defaut", str, "Pathfinder première édition", None,
-     "Jeu utilisé quand /regle est lancée sans préciser le jeu."),
+     "Jeu de repli : utilisé par /regle quand elle est lancée sans préciser le jeu et qu'aucune campagne n'est active\n"
+     "(sinon /regle prend le jeu de la campagne en cours), et pour une nouvelle campagne créée sans jeu."),
     ("regles.nb_phrases", int, 15, None, "Nombre de dernières phrases du transcript envoyées à Gemini (1 à 50)."),
     ("regles.temperature", float, 0.2, None, "Créativité de la réponse (0 = très factuel, 2 = très libre)."),
     ("regles.reflexion", str, "low", None,
