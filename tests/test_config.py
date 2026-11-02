@@ -134,3 +134,13 @@ def test_la_page_wiki_commandes_cite_toutes_les_commandes_et_actions():
         assert f"`/{name}`" in page, f"/{name} absente de wiki/Commandes.md"
     for action in CAMPAGNE_ACTIONS:
         assert f"| `{action}`" in page, f"action « {action} » absente de wiki/Commandes.md"
+
+
+def test_l_arbre_des_commandes_du_wiki_cite_chaque_action():
+    import re
+    from pathlib import Path
+    from voicebot.commands import CAMPAGNE_ACTIONS
+    page = (Path(__file__).resolve().parents[1] / "wiki" / "Commandes.md").read_text(encoding="utf-8")
+    for action in CAMPAGNE_ACTIONS:
+        assert re.search(rf"^[├└]─ {re.escape(action)}\s", page, re.M), f"« {action} » absente de l'arbre"
+        assert re.search(rf"^\| `{re.escape(action)}` \|", page, re.M), f"« {action} » absente du tableau croisé"

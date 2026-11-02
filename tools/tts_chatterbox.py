@@ -11,6 +11,7 @@ import re
 import sys
 
 PAUSE_S = 0.35          # silence entre deux morceaux
+TAIL_S = 0.5            # silence final : le dernier mot ne doit jamais être avalé
 MAX_CHARS = 220         # Chatterbox est plus stable sur des phrases courtes
 
 
@@ -101,7 +102,9 @@ def main(argv=None) -> int:
             kwargs["audio_prompt_path"] = args.voice
         wav = model.generate(chunk, **kwargs).detach().cpu()
         pieces += [wav if wav.dim() == 2 else wav.unsqueeze(0), pause]
-    torchaudio.save(args.out, torch.cat(pieces[:-1], dim=1), model.sr)
+        print(f"FAIT {i}/{len(chunks)}", flush=True)
+    pieces[-1] = torch.zeros(1, int(model.sr * TAIL_S))
+    torchaudio.save(args.out, torch.cat(pieces, dim=1), model.sr)
     print("OK", flush=True)
     return 0
 

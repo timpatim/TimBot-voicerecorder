@@ -164,6 +164,9 @@ def _traced_source(path: Path):
     return base
 
 
+PLAY_TAIL_S = 1.5       # attente après la lecture, avant de quitter le canal : évite de couper la fin
+
+
 async def play_wav(vc, path: Path):
     """Joue un fichier audio dans le canal vocal et attend la fin de la lecture (ffmpeg requis)."""
     loop, done = asyncio.get_running_loop(), asyncio.Event()
@@ -179,6 +182,7 @@ async def play_wav(vc, path: Path):
           f"dave={getattr(conn, 'dave_session', None) is not None}")
     vc.play(source, after=after)
     await done.wait()
+    await asyncio.sleep(PLAY_TAIL_S)         # `after` part quand ffmpeg a fini, pas quand Discord a tout diffusé
     # 50 trames de 20 ms par seconde ; crête sur 32767 (16 bits)
     if hasattr(source, "frames"):
         print(f"[bot] voix : lecture terminée, {source.frames} trames ({source.frames / 50:.1f} s), "
@@ -213,16 +217,16 @@ async def speak_recap(bot, guild_id, campaign, vc, channel):
         _speaking.discard(guild_id)
 
 
-_preparing = {"on": False}      # vrai pendant toute la préparation d'un audio (Whisper libéré, Chatterbox chargé)
+_preparing = {"on": False}      # vrai pendant toute la préparation d'un audio (Whisper libéré, moteur vocal chargé)
 
 
 def audio_busy() -> bool:
     return _preparing["on"] or voix.is_busy()
 
 
-async def prepare_audio(engine, campaign, session_id, text, force: bool = False) -> Path:
-    """Prépare l'audio du « précédemment » sans jamais avoir Whisper et Chatterbox chargés ensemble :
-    Whisper est libéré de la mémoire, Chatterbox synthétise, puis Whisper est rechargé.
+async def prepare_audio(engine, campaign, session_id, text, force: bool = False, progress=None) -> Path:
+    """Prépare l'audio du « précédemment » sans jamais avoir Whisper et le moteur vocal chargés ensemble :
+    Whisper est libéré de la mémoire, le moteur vocal synthétise, puis Whisper est rechargé.
     À n'appeler que hors enregistrement (les appelants le vérifient)."""
     ready = None if force else voix.cached_audio(campaign, session_id, text)
     if ready is not None:
@@ -231,17 +235,66 @@ async def prepare_audio(engine, campaign, session_id, text, force: bool = False)
         raise voix.VoixError("Une synthèse vocale est déjà en cours.")
     _preparing["on"] = True
     try:
+        if progress:
+            progress("Libération de Whisper", 0, 0)
         await asyncio.to_thread(engine.release)
-        return await asyncio.to_thread(voix.ensure_audio, campaign, session_id, text, force)
+        return await asyncio.to_thread(voix.ensure_audio, campaign, session_id, text, force, progress)
     finally:
         engine.start_loading()                           # recharge Whisper dans tous les cas
         _preparing["on"] = False
 
 
+BAR_WIDTH = 12
+
+
+def progress_text(stage: str, done: int, total: int, title: str = "") -> str:
+    """Texte d'avancement : « ▰▰▰▱▱ 3/8 morceaux » ou, sans total connu, l'étape seule."""
+    head = f"🎙️ {title}\n" if title else ""
+    if total <= 0:
+        return f"{head}⏳ {stage}…"
+    filled = round(BAR_WIDTH * done / total)
+    pct = round(100 * done / total)
+    return f"{head}`{'▰' * filled}{'▱' * (BAR_WIDTH - filled)}` {pct} % — {stage.lower()} : {done}/{total}"
+
+
+async def finish_reply(inter, text: str):
+    """Remplace le message d'avancement par le résultat ; à défaut, envoie un nouveau message."""
+    try:
+        await inter.edit_original_response(content=text)
+    except Exception:
+        await inter.followup.send(text, ephemeral=True)
+
+
+def make_progress(inter, loop, title: str, interval_s: float = 2.0):
+    """Callback de progression (appelable depuis un thread) qui met à jour la réponse de la commande.
+    Les mises à jour sont espacées (limites de débit de Discord) et une erreur d'envoi n'interrompt jamais la synthèse."""
+    state = {"last": 0.0, "text": ""}
+
+    async def push(text):
+        try:
+            await inter.edit_original_response(content=text)
+        except Exception as e:
+            print(f"[bot] voix : progression non affichée ({e!r})")
+
+    def progress(stage, done, total):
+        text = progress_text(stage, done, total, title)
+        print(f"[bot] voix : {stage} {done}/{total}" if total else f"[bot] voix : {stage}")
+        now = time.monotonic()
+        if text == state["text"] or (now - state["last"] < interval_s and 0 < done < total):
+            return
+        state["text"], state["last"] = text, now
+        asyncio.run_coroutine_threadsafe(push(text), loop)
+    return progress
+
+
+def _console_progress(stage, done, total):
+    print(f"[bot] voix : {stage} {done}/{total}" if total else f"[bot] voix : {stage}")
+
+
 async def pregenerate_audio(engine, campaign, session_id, text):
     """Prépare l'audio du « précédemment » en arrière-plan (silencieux en cas d'échec)."""
     try:
-        await prepare_audio(engine, campaign, session_id, text)
+        await prepare_audio(engine, campaign, session_id, text, progress=_console_progress)
         print(f"[bot] voix : audio du « précédemment » prêt pour {session_id}")
     except Exception as e:
         print(f"[bot] voix : préparation de l'audio impossible ({e})")
@@ -283,7 +336,7 @@ def register(bot, engine, drive):
             return
 
         if audio_busy():
-            await inter.response.send_message("La voix est en cours de préparation (Chatterbox) : réessaie dans un instant, "
+            await inter.response.send_message("La voix est en cours de préparation (synthèse vocale) : réessaie dans un instant, "
                                               "pour ne pas charger deux modèles en même temps.", ephemeral=True)
             return
         await inter.response.defer()
@@ -656,7 +709,7 @@ def register(bot, engine, drive):
                 await inter.response.send_message("La voix est désactivée (`activer = non` dans [voix] de config.ini).", **eph)
                 return
             if bot.sessions:
-                await inter.response.send_message("Impossible pendant un enregistrement : Whisper et Chatterbox ne doivent pas "
+                await inter.response.send_message("Impossible pendant un enregistrement : Whisper et le moteur vocal ne doivent pas "
                                                   "être chargés en même temps.", **eph)
                 return
             try:
@@ -673,11 +726,12 @@ def register(bot, engine, drive):
                 return
             await inter.response.defer(thinking=True, ephemeral=True)
             try:
-                await prepare_audio(engine, c, sid, text, force=regenerer)
+                progress = make_progress(inter, asyncio.get_running_loop(), f"Synthèse du « précédemment » ({sid})")
+                await prepare_audio(engine, c, sid, text, force=regenerer, progress=progress)
             except voix.VoixError as e:
-                await inter.followup.send(f"❌ {e}", ephemeral=True)
+                await finish_reply(inter, f"❌ {e}")
                 return
-            await inter.followup.send(f"✅ Audio du « précédemment » prêt ({sid}). Whisper se recharge (quelques instants).", ephemeral=True)
+            await finish_reply(inter, f"✅ Audio du « précédemment » prêt ({sid}). Whisper se recharge (quelques instants).")
             return
         if act == "mj":
             if mj is None:

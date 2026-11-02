@@ -23,3 +23,4 @@ __pycache__/
 Thumbs.db
 .conda_env
 .voix_python
+.voix_python_omnivoice

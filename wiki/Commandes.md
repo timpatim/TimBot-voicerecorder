@@ -18,6 +18,78 @@ la commande, ou dans le salon dédié si `canal_messages` est renseigné dans [`
 | [`/config`](#config) | Affiche ou modifie le traitement de fin de session | modifier : *Gérer le serveur* |
 | [`/campagne`](#campagne) | Campagnes de jeu de rôle, mémoire et voix | voir le tableau des actions |
 
+Voir aussi l'[arbre des commandes](#arbre-des-commandes) pour les paramètres valides de chaque action.
+
+## Arbre des commandes
+
+Discord propose **tous** les paramètres de `/campagne` quelle que soit l'action choisie, y compris ceux qui n'ont aucun
+sens pour elle (par exemple `/campagne dicter mj:@quelqu'un`). Un paramètre qui ne concerne pas l'action est simplement
+**ignoré**. Cet arbre indique ce qui est réellement utilisé.
+
+Légende : `*` obligatoire · `[ ]` facultatif · `🔒` demande la permission « Gérer le serveur ».
+
+```
+/record
+/stop
+/status
+/stats
+/transcript  [nombre]
+/regle       [jeu]  [phrases]
+/config      [cle [valeur]]            🔒 pour modifier une valeur
+
+/campagne  action:
+├─ liste
+├─ info             [nom]
+├─ afficher         [nom]  [quoi]  [session]  [rubrique]
+├─ dicter           [nom]  [session]
+├─ nouvelle    🔒   nom*  [jeu]  [mj]
+├─ choisir     🔒   nom*
+├─ mj          🔒   mj*  [nom]
+├─ joueur      🔒   membre*  [personnage]  [nom]
+├─ contexte    🔒   fichier*  [nom]
+├─ journal     🔒   fichier*  [nom]
+├─ pack        🔒   [fichier + session*]  [minutes]  [nom]
+├─ integrer    🔒   fichier*  [session]  [nom]
+├─ resumer     🔒   [fichier + session*]  [nom]
+├─ rollback    🔒   [nom]
+├─ audio       🔒   [session]  [nom]
+└─ audio force 🔒   [session]  [nom]
+```
+
+Précisions :
+
+- **`nom`** désigne la campagne visée. Sans `nom`, c'est la campagne active. Seules `nouvelle` et `choisir` l'exigent.
+- **`afficher`** : `quoi` vaut *compte rendu* par défaut, ou *résumé global* si `rubrique` est donnée. `rubrique` ne
+  s'applique qu'au résumé global, et `session` seulement au compte rendu et au « précédemment ».
+- **`pack`** et **`resumer`** : sans `fichier`, le bot prend la dernière session enregistrée (ou `session`). Avec un
+  `fichier` joint, `session` devient **obligatoire** (`2026-10-24` ou `2026-10-24_190000`) : c'est la date de la séance.
+- **`integrer`** : `session` sert à choisir la séance à laquelle rattacher la réponse ; par défaut, la séance en attente.
+- **`audio`** et **`audio force`** : refusées pendant un enregistrement.
+- **`liste`** n'utilise aucun paramètre.
+
+### Tableau croisé
+
+| Action | `nom` | `jeu` | `mj` | `membre` | `personnage` | `quoi` | `rubrique` | `minutes` | `session` | `fichier` |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `liste` | | | | | | | | | | |
+| `info` | ○ | | | | | | | | | |
+| `afficher` | ○ | | | | | ○ | ○ | | ○ | |
+| `dicter` | ○ | | | | | | | | ○ | |
+| `nouvelle` | ● | ○ | ○ | | | | | | | |
+| `choisir` | ● | | | | | | | | | |
+| `mj` | ○ | | ● | | | | | | | |
+| `joueur` | ○ | | | ● | ○ | | | | | |
+| `contexte` | ○ | | | | | | | | | ● |
+| `journal` | ○ | | | | | | | | | ● |
+| `pack` | ○ | | | | | | | ○ | ◐ | ○ |
+| `integrer` | ○ | | | | | | | | ○ | ● |
+| `resumer` | ○ | | | | | | | | ◐ | ○ |
+| `rollback` | ○ | | | | | | | | | |
+| `audio` | ○ | | | | | | | | ○ | |
+| `audio force` | ○ | | | | | | | | ○ | |
+
+● obligatoire · ○ facultatif · ◐ obligatoire si un `fichier` est joint · case vide : ignoré.
+
 ## Enregistrement
 
 ### `/record`

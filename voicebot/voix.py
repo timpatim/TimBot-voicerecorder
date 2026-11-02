@@ -1,7 +1,7 @@
-"""Voix du bot : synthèse vocale avec Chatterbox, lancée dans un processus séparé (environnement conda dédié).
+"""Voix du bot : synthèse vocale (OmniVoice ou Chatterbox), lancée dans un processus séparé (environnement conda dédié).
 
-Module indépendant de Discord. Le texte est nettoyé, converti en WAV par tools/tts_chatterbox.py (exécuté avec le Python
-de l'environnement de la voix) et mis en cache dans la séance : le même texte n'est synthétisé qu'une fois.
+Module indépendant de Discord. Le texte est nettoyé, converti en WAV par tools/tts_<moteur>.py (exécuté avec le Python
+de l'environnement du moteur) et mis en cache dans la séance : le même texte n'est synthétisé qu'une fois.
 """
 import hashlib
 import json
@@ -16,8 +16,15 @@ from .campagne import Campaign
 from .config import SET
 
 ROOT = Path(__file__).resolve().parent.parent
-WORKER = ROOT / "tools" / "tts_chatterbox.py"
-PYTHON_FILE = ROOT / ".voix_python"
+ENGINES = {   # moteur : (script, fichier du Python de son environnement, installeur)
+    "omnivoice": ("tts_omnivoice.py", ".voix_python_omnivoice", "install_omnivoice.bat"),
+    "chatterbox": ("tts_chatterbox.py", ".voix_python", "install_voix.bat"),
+}
+SPEED_APPLIED = "VITESSE_APPLIQUEE"       # écrit par le worker quand le moteur a lui-même réglé la vitesse
+
+
+def engine() -> str:
+    return SET["voix.moteur"] if SET["voix.moteur"] in ENGINES else "omnivoice"
 REFERENCE_NAMES = ("voix.wav", "voix.mp3", "voix.flac")
 
 
@@ -26,13 +33,13 @@ class VoixError(Exception):
 
 
 def python_exe() -> str:
-    """Python de l'environnement de la voix : réglage `voix.python`, sinon .voix_python (écrit par install_voix.bat),
+    """Python de l'environnement du moteur : réglage `voix.python`, sinon le fichier écrit par l'installeur du moteur,
     sinon l'interpréteur courant."""
     configured = SET["voix.python"].strip()
     if configured:
         return configured
     try:
-        saved = PYTHON_FILE.read_text(encoding="utf-8", errors="replace").strip()
+        saved = (ROOT / ENGINES[engine()][1]).read_text(encoding="utf-8", errors="replace").strip()
     except OSError:
         saved = ""
     return saved or sys.executable
@@ -50,6 +57,16 @@ def voice_reference(campaign: Campaign | None) -> Path | None:
     return None
 
 
+def reference_text(reference: Path | None) -> str:
+    """Transcription de l'échantillon de voix (fichier texte du même nom, ex. voix.txt), vide si absente."""
+    if reference is None:
+        return ""
+    try:
+        return reference.with_suffix(".txt").read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        return ""
+
+
 def clean_for_speech(text: str) -> str:
     """Retire la mise en forme Markdown et les marqueurs de secret, pour une lecture à voix haute."""
     text = re.sub(r"\[(?:secret:[^\]]*|mj|groupe|à confirmer)\]", "", text, flags=re.I)
@@ -65,16 +82,17 @@ def cache_key(spoken: str, reference: Path | None) -> str:
     ref = ""
     if reference is not None:
         st = reference.stat()
-        ref = f"{reference.name}:{st.st_size}:{st.st_mtime_ns}"
-    raw = "|".join([spoken, SET["voix.langue"], ref, "chatterbox-mtl", f"v{SET['voix.vitesse']}", f"p{SET['voix.pause_s']}", f"t{SET['voix.temperature']}"])
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+        ref = f"{reference.name}:{st.st_size}:{st.st_mtime_ns}:{reference_text(reference)}"
+    parts = [spoken, SET["voix.langue"], ref, engine(), f"v{SET['voix.vitesse']}", f"p{SET['voix.pause_s']}"]
+    parts.append(f"e{SET['voix.etapes']}" if engine() == "omnivoice" else f"t{SET['voix.temperature']}")
+    return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
 
 
-_lock = threading.Lock()        # une seule synthèse à la fois (un seul modèle Chatterbox chargé)
+_lock = threading.Lock()        # une seule synthèse à la fois (un seul moteur vocal chargé)
 
 
 def is_busy() -> bool:
-    """Vrai pendant qu'une synthèse vocale tourne (Chatterbox chargé)."""
+    """Vrai pendant qu'une synthèse vocale tourne (moteur vocal chargé)."""
     return _lock.locked()
 
 
@@ -95,11 +113,65 @@ def cached_audio(campaign: Campaign, session_id: str, text: str) -> Path | None:
         return None
 
 
-def _run(cmd: list, timeout: int):
-    return subprocess.run(cmd, capture_output=True, timeout=timeout)
+def _run(cmd: list, timeout: int, on_line=None):
+    """Lance le worker. `on_line(texte)` reçoit chaque ligne écrite par le worker au fil de l'eau (suivi de progression)."""
+    if on_line is None:
+        return subprocess.run(cmd, capture_output=True, timeout=timeout)
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    expired = threading.Event()
+
+    def kill():
+        expired.set()
+        proc.kill()
+    timer = threading.Timer(timeout, kill)
+    err_chunks: list = []
+    reader = threading.Thread(target=lambda: err_chunks.append(proc.stderr.read()), daemon=True)
+    timer.start()
+    reader.start()
+    out_lines = []
+    try:
+        for raw in proc.stdout:
+            line = raw.decode("utf-8", errors="replace").rstrip()
+            out_lines.append(line)
+            try:
+                on_line(line)
+            except Exception:
+                pass
+        proc.wait()
+        reader.join(5)
+    finally:
+        timer.cancel()
+        if proc.poll() is None:
+            proc.kill()
+    if expired.is_set():
+        raise subprocess.TimeoutExpired(cmd, timeout)
+    return subprocess.CompletedProcess(cmd, proc.returncode, "\n".join(out_lines).encode("utf-8"),
+                                       b"".join(err_chunks))
 
 
-def ensure_audio(campaign: Campaign, session_id: str, text: str, force: bool = False) -> Path:
+RE_CHUNK = re.compile(r"^(MORCEAU|FAIT) (\d+)/(\d+)")
+
+
+def _progress_from(progress):
+    """Transforme les lignes du worker en appels progress(étape, faits, total)."""
+    if progress is None:
+        return None
+
+    def on_line(line: str):
+        m = RE_CHUNK.match(line)
+        if m:
+            kind, i, n = m.group(1), int(m.group(2)), int(m.group(3))
+            progress("Synthèse", i if kind == "FAIT" else i - 1, n)
+            if kind == "FAIT":
+                print(f"[bot] voix : {line}")                 # durée obtenue / durée attendue de chaque morceau
+        elif line.startswith("Chargement"):
+            progress("Chargement du modèle", 0, 0)
+        elif line.startswith(("ALERTE", "NOTE")):
+            print(f"[bot] voix : {line}")
+    return on_line
+
+
+def ensure_audio(campaign: Campaign, session_id: str, text: str, force: bool = False, progress=None) -> Path:
     """Prépare le WAV du « précédemment » de cette séance (ou le renvoie s'il est déjà à jour).
     `force=True` régénère même si l'audio est à jour (la synthèse varie d'un essai à l'autre) ; l'ancien audio est gardé
     en `precedemment.precedent.wav` et remis en place si la nouvelle synthèse échoue.
@@ -122,7 +194,7 @@ def ensure_audio(campaign: Campaign, session_id: str, text: str, force: bool = F
             if meta.exists():
                 shutil.copy2(meta, old_meta)
         try:
-            return _synthesize(campaign, session_id, spoken)
+            return _synthesize(campaign, session_id, spoken, progress)
         except Exception:
             if kept:                                    # on ne perd pas l'audio précédent
                 shutil.copy2(old_wav, wav)
@@ -152,7 +224,7 @@ def _speed_up(wav: Path, factor: float) -> None:
         tmp.unlink(missing_ok=True)
 
 
-def _synthesize(campaign: Campaign, session_id: str, spoken: str) -> Path:
+def _synthesize(campaign: Campaign, session_id: str, spoken: str, progress=None) -> Path:
     reference = voice_reference(campaign)
     key = cache_key(spoken, reference)
     wav, meta, src = _paths(campaign, session_id)
@@ -160,13 +232,19 @@ def _synthesize(campaign: Campaign, session_id: str, spoken: str) -> Path:
     wav.unlink(missing_ok=True)
     meta.unlink(missing_ok=True)
     src.write_text(spoken + "\n", encoding="utf-8")
-    cmd = [python_exe(), str(WORKER), "--in", str(src), "--out", str(wav), "--lang", SET["voix.langue"],
-           "--device", SET["voix.device"] or "auto", "--pause", str(SET["voix.pause_s"]),
-           "--temperature", str(SET["voix.temperature"])]
+    script, _pyfile, installer = ENGINES[engine()]
+    cmd = [python_exe(), str(ROOT / "tools" / script), "--in", str(src), "--out", str(wav), "--lang", SET["voix.langue"],
+           "--device", SET["voix.device"] or "auto", "--pause", str(SET["voix.pause_s"])]
+    if engine() == "omnivoice":
+        cmd += ["--steps", str(SET["voix.etapes"])]            # vitesse : ffmpeg après coup (atempo), pas le modèle
+        if reference is not None and reference_text(reference):
+            cmd += ["--voice-text", reference_text(reference)]
+    else:
+        cmd += ["--temperature", str(SET["voix.temperature"])]
     if reference is not None:
         cmd += ["--voice", str(reference)]
     try:
-        done = _run(cmd, SET["voix.delai_s"])
+        done = _run(cmd, SET["voix.delai_s"], _progress_from(progress)) if progress else _run(cmd, SET["voix.delai_s"])
     except subprocess.TimeoutExpired:
         raise VoixError(f"La synthèse vocale a dépassé {SET['voix.delai_s']} s (`delai_s` dans [voix]) : "
                         "GPU absent ou occupé ?") from None
@@ -175,8 +253,8 @@ def _synthesize(campaign: Campaign, session_id: str, spoken: str) -> Path:
     err = (done.stderr or b"").decode("utf-8", errors="replace")
     if done.returncode != 0 or not wav.exists():
         wav.unlink(missing_ok=True)
-        if "No module named" in err and ("chatterbox" in err or "torch" in err):
-            raise VoixError("Chatterbox n'est pas installé dans cet environnement : lance install_voix.bat.")
+        if "No module named" in err and ("chatterbox" in err or "omnivoice" in err or "torch" in err):
+            raise VoixError(f"{engine().capitalize()} n'est pas installé dans cet environnement : lance {installer}.")
         if "PerthImplicitWatermarker" in err:
             raise VoixError('Le filigrane « perth » de Chatterbox ne s\'importe pas (souvent : setuptools trop récent). Dans '
                             'l\'environnement de la voix : `pip install "setuptools<81"`, puis relance. Détail : '
@@ -185,7 +263,10 @@ def _synthesize(campaign: Campaign, session_id: str, spoken: str) -> Path:
             raise VoixError("Mémoire GPU insuffisante pour la voix : mets `device = cpu` dans [voix] (plus lent).")
         tail = " | ".join(line.strip() for line in err.strip().splitlines()[-3:]) or f"code {done.returncode}"
         raise VoixError(f"La synthèse vocale a échoué : {tail[:300]}")
-    _speed_up(wav, float(SET["voix.vitesse"]))
+    if progress:
+        progress("Finalisation", 1, 1)
+    if SPEED_APPLIED not in (done.stdout or b"").decode("utf-8", errors="replace"):
+        _speed_up(wav, float(SET["voix.vitesse"]))
     meta.write_text(json.dumps({"cle": key, "voix": reference.name if reference else "défaut"}, ensure_ascii=False) + "\n",
                     encoding="utf-8")
     return wav

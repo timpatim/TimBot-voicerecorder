@@ -31,7 +31,7 @@ SECTION_TITLES = {
     "drive": "Google Drive",
     "regles": "Google Gemini : questions de règles (/regle) et génération du contexte de campagne (/campagne)",
     "campagnes": "Campagnes de jeu de rôle (commande /campagne)",
-    "voix": "Voix du bot (Chatterbox) : « Dans l'épisode précédent… » dicté dans le canal vocal",
+    "voix": "Voix du bot (OmniVoice ou Chatterbox) : « Dans l'épisode précédent… » dicté dans le canal vocal",
 }
 
 # (section.clé, type, défaut, ancienne variable d'environnement, description)
@@ -129,20 +129,26 @@ SETTINGS = [
      "Active la voix du bot (nécessite install_voix.bat). Désactivée : aucune synthèse vocale, aucune lecture."),
     ("voix.au_demarrage", bool, True, None,
      "Au /record, le bot dicte dans le canal vocal le « précédemment » de la dernière séance (audio préparé à l'avance)."),
+    ("voix.moteur", str, "omnivoice", None,
+     "Moteur de synthèse : omnivoice (install_omnivoice.bat) ou chatterbox (install_voix.bat). Changer de moteur invalide\n"
+     "les audios déjà préparés."),
     ("voix.python", str, "", None,
-     "Python de l'environnement de la voix (vide = celui écrit par install_voix.bat, sinon celui du bot)."),
-    ("voix.langue", str, "fr", None, "Langue lue (code Chatterbox : fr, en, es...)."),
+     "Python de l'environnement de la voix (vide = celui écrit par l'installeur du moteur choisi, sinon celui du bot)."),
+    ("voix.langue", str, "fr", None, "Langue lue (code à deux lettres : fr, en, es...)."),
     ("voix.voix_reference", str, "", None,
      "Échantillon audio (~10 s) de la voix à imiter, valable pour toutes les campagnes ; une campagne peut avoir sa propre "
-     "voix en plaçant voix.wav dans son dossier. Vide et sans voix.wav = voix par défaut. "
+     "voix en plaçant voix.wav dans son dossier. Vide et sans voix.wav = voix par défaut. Avec OmniVoice, un fichier "
+     "texte du même nom (voix.txt) donne la transcription de l'échantillon ; sans lui, OmniVoice la devine avec Whisper. "
      "À n'utiliser qu'avec l'accord de la personne dont c'est la voix."),
     ("voix.device", str, "", None, "cuda ou cpu (vide = automatique)."),
-    ("voix.vitesse", float, 1.15, None,
+    ("voix.vitesse", float, 1.0, None,
      "Vitesse de lecture (1.0 = normale, 1.15 = un peu plus rapide). Appliquée sans changer la hauteur de la voix. "
      "Entre 0.5 et 2.0."),
     ("voix.pause_s", float, 0.25, None, "Silence (s) entre deux morceaux de texte (avant accélération)."),
+    ("voix.etapes", int, 32, None,
+     "OmniVoice : nombre d'étapes de génération (32 = qualité recommandée, 16 = plus rapide). Sans effet avec Chatterbox."),
     ("voix.temperature", float, 0.6, None,
-     "Variabilité de la synthèse (0.8 = défaut de Chatterbox). 0.6 limite les mots farfelus et les bruits ; "
+     "Chatterbox uniquement. Variabilité de la synthèse (0.8 = défaut de Chatterbox). 0.6 limite les mots farfelus et les bruits ; "
      "trop bas, la voix devient monotone. Si un audio est raté, relance avec /campagne audio force."),
     ("voix.mots", int, 110, None,
      "Longueur visée (en mots) du « précédemment » demandé à l'IA dans les prompts. ~110 mots = environ 40 s à voix haute. "
@@ -210,6 +216,8 @@ CHECKS = {   # clé : (test, message)
     "discord.canal_messages": (lambda v: v == "" or v.isdigit(), "attendu : l'identifiant numérique du salon (ou vide)"),
     "regles.reflexion": (lambda v: v in ("auto", "minimal", "low", "medium", "high"),
                          "attendu : auto, minimal, low, medium ou high"),
+    "voix.moteur": (lambda v: v in ("omnivoice", "chatterbox"), "attendu : omnivoice ou chatterbox"),
+    "voix.etapes": (lambda v: 4 <= v <= 128, "attendu : un entier de 4 à 128"),
     "voix.langue": (lambda v: bool(v), "ne peut pas être vide"),
     "voix.device": (lambda v: v in ("", "cuda", "cpu"), "attendu : cuda, cpu ou vide"),
     "voix.vitesse": (lambda v: 0.5 <= v <= 2.0, "attendu : un nombre de 0.5 à 2.0"),

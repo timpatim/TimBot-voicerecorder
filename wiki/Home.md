@@ -99,14 +99,17 @@ Si votre chat ne lit pas un long fichier en entier, découpez en parties avec `p
 Le bot ne lit **que** le « précédemment », et seulement un fichier audio **préparé à l'avance** : il ne synthétise jamais
 pendant un enregistrement, pour ne pas avoir Whisper et Chatterbox en mémoire en même temps.
 
-- Installation : `install_voix.bat` crée un environnement conda séparé (`voicerecorder-voix`) avec Chatterbox, puis
-  `activer = oui` dans `[voix]`.
+- Moteurs (`moteur` dans `[voix]`) : **OmniVoice** (par défaut) ou **Chatterbox**. Les poids d'OmniVoice sont sous licence
+  CC-BY-NC (usage non commercial).
+- Installation : `install_omnivoice.bat` (ou `install_voix.bat` pour Chatterbox) crée un environnement conda séparé pour le
+  moteur, puis `activer = oui` dans `[voix]`. Changer de moteur invalide les audios préparés.
 - Préparation : automatique après `/campagne integrer`, ou `/campagne audio` (refusée pendant un enregistrement). Whisper est
   libéré de la mémoire pendant la synthèse puis rechargé.
+- Pendant la préparation, un message affiche une barre de progression. Un morceau tronqué est détecté et régénéré.
 - Audio raté : `/campagne audio force` en refait un autre ; l'ancien est gardé en `precedemment.precedent.wav`.
-- Voix : celle par défaut de Chatterbox, ou une voix clonée à partir de `voix.wav` (~10 s de parole claire) placé dans le
-  dossier de la campagne. **N'utilisez que la voix d'une personne qui a donné son accord.**
-- Réglages : `vitesse`, `pause_s`, `temperature`, `mots` dans [`[voix]`](Configuration#voix).
+- Voix : celle choisie par le moteur, ou une voix clonée à partir de `voix.wav` (~10 s de parole claire) placé dans le
+  dossier de la campagne. Avec OmniVoice, ajoutez `voix.txt` : la transcription de l'échantillon. **N'utilisez que la voix d'une personne qui a donné son accord.**
+- Réglages : `vitesse`, `pause_s`, `etapes` (OmniVoice), `temperature` (Chatterbox), `mots` dans [`[voix]`](Configuration#voix).
 
 ## Fichiers produits
 
@@ -165,9 +168,9 @@ Données qui quittent votre machine :
 | `/record` sans effet, commandes absentes | Ctrl+R dans Discord ; vérifier les permissions du bot |
 | Pas de réception audio | `discord-ext-voice-recv` sur PyPI ne gère pas le chiffrement DAVE : `requirements.txt` utilise un fork épinglé |
 | Le bot parle mais aucun son | Vérifier la sortie audio de **votre** appareil (casque ou haut-parleurs), puis la permission *Parler* et le volume du bot |
-| Synthèse vocale : `PerthImplicitWatermarker ... NoneType` | Dans l'environnement `voicerecorder-voix` : `pip install "setuptools<81"` (déjà fait par `install_voix.bat`) |
+| Synthèse vocale (Chatterbox) : `PerthImplicitWatermarker ... NoneType` | Dans l'environnement `voicerecorder-voix` : `pip install "setuptools<81"` (déjà fait par `install_voix.bat`) |
 | Synthèse vocale : mémoire GPU insuffisante | `device = cpu` dans `[voix]` (plus lent) |
-| Audio avec mots farfelus ou bruits | `/campagne audio force`, ou baisser `temperature` à 0.6 |
+| Audio avec mots farfelus ou bruits | `/campagne audio force` ; avec Chatterbox, baisser `temperature` |
 | Une réponse de chat ne passe pas à `integrer` | Vérifier la présence des trois lignes `=== COMPTE RENDU ===`, `=== RESUME GLOBAL ===`, `=== PRECEDEMMENT ===` |
 | La transcription prend du retard | Voir la file dans `/status` ; un modèle Whisper plus petit ou le GPU règlent le problème |
 

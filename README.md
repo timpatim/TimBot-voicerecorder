@@ -173,7 +173,7 @@ Au premier lancement, `config.ini` est créé avec les valeurs par défaut et to
 | `[mp3]` | débit, chemin de ffmpeg |
 | `[drive]` | identifiants, jeton, dossier racine |
 | `[regles]` | accès Gemini (clé, modèle, réflexion) et commande `/regle` : jeu par défaut, nombre de phrases, consigne |
-| `[voix]` | voix du bot (Chatterbox) : activation, lecture au `/record`, voix de référence, langue, Python de l'environnement dédié |
+| `[voix]` | voix du bot (OmniVoice ou Chatterbox) : activation, moteur, lecture au `/record`, voix de référence, langue, vitesse, Python de l'environnement dédié |
 | `[campagnes]` | commande `/campagne` et mémoire de campagne : dossier, tailles maximales, packs (`pack_auto`, `pack_minutes`), génération par API (`resume_auto`, tranches, délai) |
 
 Les étapes de `[fin_de_session]` sont relues à chaque `/stop`, sans redémarrer.
@@ -301,20 +301,22 @@ Chaque mise à jour du résumé global (import du journal, fin de session) crée
 
 Avec un transcript joint (`pack` ou `resumer` avec `fichier`), le paramètre `session` est obligatoire (`2026-10-24` ou `2026-10-24_190000`) : il donne la date de la séance.
 
-## Voix du bot (Chatterbox, optionnelle)
+## Voix du bot (OmniVoice ou Chatterbox, optionnelle)
 
-Le bot peut dicter à voix haute le « Dans l'épisode précédent… » (et seulement lui) au démarrage d'un enregistrement, et à la demande avec `/campagne dicter` (`session:` pour une autre séance). La synthèse vocale utilise [Chatterbox](https://github.com/resemble-ai/chatterbox) (modèle multilingue, français inclus, licence MIT). **Désactivée par défaut.**
+Le bot peut dicter à voix haute le « Dans l'épisode précédent… » (et seulement lui) au démarrage d'un enregistrement, et à la demande avec `/campagne dicter` (`session:` pour une autre séance). Deux moteurs au choix (`moteur` dans `[voix]`) : [OmniVoice](https://github.com/k2-fsa/OmniVoice) (par défaut ; multilingue, code Apache 2.0, **poids du modèle sous licence CC-BY-NC : usage non commercial**) et [Chatterbox](https://github.com/resemble-ai/chatterbox) (français inclus, licence MIT, ajoute un filigrane inaudible « perth » à l'audio). **Voix désactivée par défaut.**
 
 **Principe : le bot ne lit qu'un fichier audio préparé à l'avance, il ne synthétise jamais pendant un enregistrement.** Whisper et Chatterbox ne doivent pas être chargés en même temps : pour préparer un audio, le bot **libère Whisper de la mémoire, lance Chatterbox, puis recharge Whisper** (quelques dizaines de secondes, l'état s'affiche dans le statut du bot).
 - L'audio (`seances/<session>/precedemment.wav`) est préparé **automatiquement après `/campagne integrer`**, ou avec **`/campagne audio`** (permission « Gérer le serveur »). `/campagne audio` est refusée pendant un enregistrement, et `/record` est refusé pendant une synthèse.
 - Si l'audio n'est pas prêt (ou si le « précédemment » a été modifié depuis), `/record` et `/campagne dicter` le signalent et ne disent rien.
 
 Installation :
-1. Lancez `install_voix.bat` : il crée un environnement conda **séparé** (`voicerecorder-voix`, Python 3.11), y installe `chatterbox-tts` puis lui donne un PyTorch GPU de la même version. Le bot l'appelle comme un programme externe ; son environnement n'est pas touché. Le premier lancement télécharge le modèle (plusieurs Go).
+1. Lancez l'installeur du moteur choisi : `install_omnivoice.bat` (crée l'environnement conda séparé `voicerecorder-omnivoice`, Python 3.11, avec PyTorch 2.8 CPU ou GPU puis `omnivoice`) ou `install_voix.bat` (environnement `voicerecorder-voix` avec `chatterbox-tts`, puis un PyTorch GPU de la même version). Chaque moteur a son environnement ; le bot l'appelle comme un programme externe, le sien n'est pas touché. Le premier lancement télécharge le modèle (plusieurs Go). Changer de moteur dans `config.ini` invalide les audios déjà préparés.
 2. Dans `config.ini`, section `[voix]` : `activer = oui`. `au_demarrage = non` désactive seulement la lecture au `/record`.
-3. **Voix** : par défaut, la voix de Chatterbox. Si un fichier `voix.wav` (ou `.mp3`, `.flac`, ~10 s de parole claire) existe dans le dossier de la campagne, ou si `voix_reference` pointe vers un échantillon, Chatterbox imite cette voix (celle de la campagne prime). N'utilisez que la voix d'une personne qui a donné son accord. Changer de voix invalide l'audio : refaites `/campagne audio`.
+3. **Voix** : par défaut, la voix de Chatterbox. Si un fichier `voix.wav` (ou `.mp3`, `.flac`, ~10 s de parole claire) existe dans le dossier de la campagne, ou si `voix_reference` pointe vers un échantillon, le moteur imite cette voix (celle de la campagne prime). Avec OmniVoice, ajoutez à côté un fichier texte du même nom (`voix.txt`) contenant ce que dit l'échantillon : sans lui, OmniVoice le transcrit avec Whisper, au risque d'une erreur. N'utilisez que la voix d'une personne qui a donné son accord. Changer de voix invalide l'audio : refaites `/campagne audio`.
 
-4. **Durée et rythme** : `vitesse` (1.15 par défaut, de 0.5 à 2.0) accélère la lecture sans changer la hauteur de la voix (via ffmpeg) ; `pause_s` règle le silence entre deux morceaux ; `mots` (110 par défaut, soit environ 40 s) fixe la longueur demandée à l'IA dans les prompts du « précédemment ». Ce dernier ne change pas un texte déjà écrit : modifiez `precedemment.md` ou refaites le pack. Chaque changement invalide l'audio : refaites `/campagne audio`.
-5. **Audio raté** (mots farfelus, bruits) : la synthèse varie d'un essai à l'autre. `/campagne audio force` en refait un nouveau même si l'audio est à jour ; l'ancien est gardé en `precedemment.precedent.wav` (et remis en place si la nouvelle synthèse échoue). Si les ratés sont fréquents, baissez `temperature` (0.6) dans `[voix]`.
+4. **Durée et rythme** : `vitesse` (1.0 par défaut, de 0.5 à 2.0 ; 1.15 est un peu plus rapide) accélère la lecture sans changer la hauteur de la voix (ffmpeg, après la synthèse) ; `pause_s` règle le silence entre deux morceaux ; `mots` (110 par défaut, soit environ 40 s) fixe la longueur demandée à l'IA dans les prompts du « précédemment ». Ce dernier ne change pas un texte déjà écrit : modifiez `precedemment.md` ou refaites le pack. Chaque changement invalide l'audio : refaites `/campagne audio`.
+5. **Audio raté** (mots farfelus, bruits) : la synthèse varie d'un essai à l'autre. `/campagne audio force` en refait un nouveau même si l'audio est à jour ; l'ancien est gardé en `precedemment.precedent.wav` (et remis en place si la nouvelle synthèse échoue). Pour un ton plus vivant, c'est le texte qui compte (le prompt du « précédemment » demande un récap de série télé) : OmniVoice n'accepte pas d'instruction d'émotion, mais comprend des marques comme `[laughter]` ou `[sigh]` dans le texte. Avec Chatterbox, baissez `temperature` si les ratés sont fréquents ; avec OmniVoice, `etapes` (32 par défaut) règle la qualité (16 = plus rapide).
+
+Pendant `/campagne audio`, le message affiche une **barre de progression** (libération de Whisper, chargement du modèle, morceau par morceau). Avec OmniVoice, un morceau nettement plus court que son texte (fin avalée) est détecté et régénéré jusqu'à 2 fois, avec une durée imposée d'après son nombre de mots ; l'audio se termine par un court silence, et le bot attend un instant avant de quitter le canal pour ne pas couper la fin.
 
 En cas d'échec, le bot l'indique et l'enregistrement continue. La voix du bot n'est pas transcrite.

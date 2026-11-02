@@ -14,6 +14,7 @@ from tests.test_pack import REPONSE, ROWS, SID, camp  # noqa: F401  (fixture cam
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
 import tts_chatterbox  # noqa: E402
+import tts_omnivoice  # noqa: E402
 import fix_voix_torch  # noqa: E402
 
 
@@ -24,14 +25,18 @@ def integrated(camp):
 
 class FakeRun:
     """Remplace le lancement du processus Chatterbox : écrit un WAV bidon, ou échoue."""
-    def __init__(self, code=0, stderr=b"", wav_bytes=b"RIFFfake"):
-        self.code, self.stderr, self.cmds, self.wav_bytes = code, stderr, [], wav_bytes
+    def __init__(self, code=0, stderr=b"", wav_bytes=b"RIFFfake", stdout=b""):
+        self.code, self.stderr, self.cmds, self.wav_bytes, self.stdout = code, stderr, [], wav_bytes, stdout
 
-    def __call__(self, cmd, timeout):
+    lines = ()                                         # lignes que le worker « écrit » au fil de l'eau
+
+    def __call__(self, cmd, timeout, on_line=None):
         self.cmds.append(cmd)
+        for line in (self.lines if on_line else ()):
+            on_line(line)
         if self.code == 0:
             Path(cmd[cmd.index("--out") + 1]).write_bytes(self.wav_bytes)
-        return subprocess.CompletedProcess(cmd, self.code, b"", self.stderr)
+        return subprocess.CompletedProcess(cmd, self.code, self.stdout, self.stderr)
 
 
 def test_nettoyage_du_texte_pour_la_voix():
@@ -76,7 +81,7 @@ def test_voix_clonee_si_un_echantillon_existe_sinon_voix_par_defaut(camp, monkey
 
 
 @pytest.mark.parametrize("stderr,expected", [
-    (b"ModuleNotFoundError: No module named 'chatterbox'", "install_voix.bat"),
+    (b"ModuleNotFoundError: No module named 'omnivoice'", "install_omnivoice.bat"),
     (b"torch.OutOfMemoryError: CUDA out of memory", "Mémoire GPU"),
     (b"boom\nautre erreur", "autre erreur")])
 def test_erreurs_de_synthese_lisibles(camp, monkeypatch, stderr, expected):
@@ -88,18 +93,21 @@ def test_erreurs_de_synthese_lisibles(camp, monkeypatch, stderr, expected):
 
 def test_delai_depasse(camp, monkeypatch):
     out = integrated(camp)
-    def slow(cmd, timeout): raise subprocess.TimeoutExpired(cmd, timeout)
+    def slow(cmd, timeout, on_line=None): raise subprocess.TimeoutExpired(cmd, timeout)
     monkeypatch.setattr(voix, "_run", slow)
     with pytest.raises(voix.VoixError, match="dépassé"):
         voix.ensure_audio(camp, SID, out["precedemment"])
 
 
 def test_python_de_la_voix(monkeypatch, tmp_path):
-    monkeypatch.setattr(voix, "PYTHON_FILE", tmp_path / "absent")
+    monkeypatch.setattr(voix, "ROOT", tmp_path)
     assert voix.python_exe() == sys.executable
-    (tmp_path / "p").write_text("C:\\envs\\voix\\python.exe\n", encoding="utf-8")
-    monkeypatch.setattr(voix, "PYTHON_FILE", tmp_path / "p")
+    (tmp_path / ".voix_python_omnivoice").write_text("C:\\envs\\voix\\python.exe\n", encoding="utf-8")
     assert voix.python_exe() == "C:\\envs\\voix\\python.exe"
+    monkeypatch.setitem(SET.values, "voix.moteur", "chatterbox")             # chaque moteur a son environnement
+    assert voix.python_exe() == sys.executable
+    (tmp_path / ".voix_python").write_text("C:\\envs\\chatter\\python.exe\n", encoding="utf-8")
+    assert voix.python_exe() == "C:\\envs\\chatter\\python.exe"
     monkeypatch.setitem(SET.values, "voix.python", "D:\\autre\\python.exe")
     assert voix.python_exe() == "D:\\autre\\python.exe"
 
@@ -124,11 +132,11 @@ def test_cached_audio_ne_synthetise_jamais_et_detecte_un_texte_modifie(camp, mon
 
 def test_une_seule_synthese_a_la_fois(camp, monkeypatch):
     out = integrated(camp)
-    def reentrant(cmd, timeout):
+    def reentrant(cmd, timeout, on_line=None):
         assert voix.is_busy()
         with pytest.raises(voix.VoixError, match="déjà en cours"):
             voix.ensure_audio(camp, "autre-seance", "Un autre texte.")
-        return FakeRun()(cmd, timeout)
+        return FakeRun()(cmd, timeout, on_line)
     monkeypatch.setattr(voix, "_run", reentrant)
     voix.ensure_audio(camp, SID, out["precedemment"])
     assert not voix.is_busy()
@@ -367,3 +375,148 @@ def test_audio_force_regenere_meme_si_pret(camp, voix_on, monkeypatch, engine_ca
     assert len(voix_on.cmds) == 1
     run_action(voice_inter(FakeVC()), "audio force")
     assert len(voix_on.cmds) == 2
+
+
+def test_moteur_chatterbox_garde_son_worker_son_installeur_et_ses_messages(camp, monkeypatch):
+    out = integrated(camp)
+    monkeypatch.setitem(SET.values, "voix.moteur", "chatterbox")
+    run = FakeRun()
+    monkeypatch.setattr(voix, "_run", run)
+    voix.ensure_audio(camp, SID, out["precedemment"])
+    assert run.cmds[-1][1].endswith("tts_chatterbox.py") and "--temperature" in run.cmds[-1] and "--speed" not in run.cmds[-1]
+    monkeypatch.setattr(voix, "_run", FakeRun(1, b"No module named 'chatterbox'"))
+    with pytest.raises(voix.VoixError, match="install_voix.bat"):
+        voix.ensure_audio(camp, SID, out["precedemment"], force=True)
+
+
+def test_omnivoice_par_defaut_vitesse_native_et_texte_de_reference(camp, monkeypatch):
+    out = integrated(camp)
+    ref = camp.path / "voix.wav"
+    ref.write_bytes(b"x" * 10)
+    ref.with_suffix(".txt").write_text("Bonjour, voici ma voix.\n", encoding="utf-8")
+    run = FakeRun()
+    monkeypatch.setattr(voix, "_run", run)
+    seen = []
+    monkeypatch.setattr(voix, "_speed_up", lambda wav, f: seen.append(f))
+    voix.ensure_audio(camp, SID, out["precedemment"])
+    cmd = run.cmds[-1]
+    assert cmd[1].endswith("tts_omnivoice.py") and "--temperature" not in cmd
+    assert "--speed" not in cmd and cmd[cmd.index("--steps") + 1] == "32"                 # la vitesse est réglée par ffmpeg
+    assert cmd[cmd.index("--voice-text") + 1] == "Bonjour, voici ma voix."
+    assert seen == [SET["voix.vitesse"]]                                       # le bot accélère avec ffmpeg
+    monkeypatch.setattr(voix, "_run", FakeRun(stdout=voix.SPEED_APPLIED.encode()))   # un worker qui l'a déjà fait : pas de double
+    voix.ensure_audio(camp, SID, out["precedemment"], force=True)
+    assert seen == [SET["voix.vitesse"]]
+
+
+def test_changer_de_moteur_ou_de_texte_de_reference_invalide_l_audio(camp, monkeypatch):
+    out = integrated(camp)
+    monkeypatch.setattr(voix, "_run", FakeRun())
+    assert voix.cached_audio(camp, SID, out["precedemment"]) is None
+    voix.ensure_audio(camp, SID, out["precedemment"])
+    assert voix.cached_audio(camp, SID, out["precedemment"]) is not None
+    monkeypatch.setitem(SET.values, "voix.moteur", "chatterbox")
+    assert voix.cached_audio(camp, SID, out["precedemment"]) is None
+
+
+def test_worker_omnivoice_choisit_les_parametres_selon_la_signature():
+    import argparse
+    args = argparse.Namespace(speed=1.2, steps=16, lang="fr", voice="r.wav", voice_text="texte")
+    kwargs, notes = tts_omnivoice.pick_params({"text", "speed", "num_step", "language", "ref_audio", "ref_text"}, args)
+    assert kwargs == {"speed": 1.2, "num_step": 16, "language": "fr", "ref_audio": "r.wav", "ref_text": "texte"} and notes == []
+    kwargs, notes = tts_omnivoice.pick_params({"text", "ref_audio"}, args)          # ni vitesse ni langue : on le dit
+    assert "speed" not in kwargs and "language" not in kwargs and len(notes) == 2
+    kwargs, _ = tts_omnivoice.pick_params(None, args)                               # **kwargs : on ne devine pas la langue
+    assert "language" not in kwargs and kwargs["speed"] == 1.2
+
+
+# --- progression et fin de lecture ------------------------------------------------------------------
+
+@pytest.fixture(autouse=True)
+def pas_d_attente_apres_lecture(monkeypatch):
+    monkeypatch.setattr(commands, "PLAY_TAIL_S", 0)
+
+
+def test_la_progression_suit_les_lignes_du_worker(camp, monkeypatch):
+    out = integrated(camp)
+    run = FakeRun()
+    run.lines = ["Chargement d'OmniVoice (cuda)...", "MORCEAU 1/2", "FAIT 1/2 duree=4.0s", "ALERTE : morceau 2 trop court",
+                 "MORCEAU 2/2", "FAIT 2/2 duree=5.0s", "OK"]
+    monkeypatch.setattr(voix, "_run", run)
+    seen = []
+    voix.ensure_audio(camp, SID, out["precedemment"], progress=lambda *a: seen.append(a))
+    assert seen[0] == ("Chargement du modèle", 0, 0)
+    assert ("Synthèse", 0, 2) in seen and ("Synthèse", 1, 2) in seen and ("Synthèse", 2, 2) in seen
+    assert seen[-1] == ("Finalisation", 1, 1)
+
+
+def test_run_lit_la_sortie_au_fil_de_l_eau_et_respecte_le_delai():
+    lines = []
+    done = voix._run([sys.executable, "-c", "print('MORCEAU 1/1', flush=True); print('OK')"], 30, lines.append)
+    assert lines == ["MORCEAU 1/1", "OK"] and done.returncode == 0 and b"OK" in done.stdout
+    bad = voix._run([sys.executable, "-c", "import sys; sys.stderr.write('boom'); sys.exit(3)"], 30, lines.append)
+    assert bad.returncode == 3 and bad.stderr == b"boom"
+    with pytest.raises(subprocess.TimeoutExpired):
+        voix._run([sys.executable, "-c", "import time; time.sleep(30)"], 1, lines.append)
+
+
+def test_texte_de_progression():
+    assert "30 %" in commands.progress_text("Synthèse", 3, 10) and "3/10" in commands.progress_text("Synthèse", 3, 10)
+    assert commands.progress_text("Chargement du modèle", 0, 0, "Titre").startswith("🎙️ Titre")
+    assert "▰" * commands.BAR_WIDTH in commands.progress_text("Synthèse", 4, 4)
+
+
+def test_la_commande_audio_affiche_la_progression_puis_le_resultat(camp, voix_on, monkeypatch):
+    integrated(camp)
+    voix_on.lines = ["MORCEAU 1/2", "FAIT 1/2 duree=3.0s", "MORCEAU 2/2", "FAIT 2/2 duree=3.0s"]
+    monkeypatch.setattr(voix, "_run", voix_on)
+    inter = voice_inter(FakeVC())
+    edits = []
+
+    async def edit(content=None, **kw): edits.append(content)
+    inter.edit_original_response = edit
+    run_action(inter, "audio")
+    assert any("Synthèse" in e for e in edits) and "prêt" in edits[-1]
+    assert not any("prêt" in (o or "") for o in inter.out)                      # un seul message : l'original est modifié
+
+
+def test_worker_omnivoice_detecte_un_morceau_tronque():
+    chunk = "Dans l'épisode précédent de la campagne les héros entrent dans la crypte oubliée"   # 13 mots, ~4,8 s attendues
+    assert tts_omnivoice.is_truncated(1.5, chunk, 1.0)
+    assert not tts_omnivoice.is_truncated(4.5, chunk, 1.0)
+    assert not tts_omnivoice.is_truncated(0.2, "Oui.", 1.0)                       # trop court pour juger
+
+
+# --- OmniVoice : morceaux tronqués -------------------------------------------------
+
+class FakeModel:
+    """generate() qui rend un tableau dont la durée dépend du réglage `duration`."""
+    def __init__(self, short_seconds=1.0):
+        self.calls, self.short = [], short_seconds
+
+    def generate(self, text, **kw):
+        import numpy as np
+        self.calls.append(kw)
+        seconds = kw.get("duration", self.short)
+        return [np.zeros(int(tts_omnivoice.SAMPLE_RATE * seconds), dtype=np.float32)]
+
+
+CHUNK = "Dans l'épisode précédent de la campagne les héros entrent dans la crypte oubliée"
+
+
+def test_un_morceau_tronque_est_regenere_avec_une_duree_imposee():
+    model, logs = FakeModel(short_seconds=1.0), []
+    wav, seconds = tts_omnivoice.synthesize_chunk(model, CHUNK, {"speed": 1.0}, 1.0, True, logs.append)
+    assert "duration" not in model.calls[0] and "duration" in model.calls[1]
+    assert seconds >= tts_omnivoice.MIN_RATIO * tts_omnivoice.expected_seconds(CHUNK, 1.0)
+    assert len(model.calls) == 2 and any("trop court" in m for m in logs)
+
+
+def test_un_morceau_complet_n_est_pas_regenere_et_les_essais_sont_limites():
+    model = FakeModel(short_seconds=6.0)
+    tts_omnivoice.synthesize_chunk(model, CHUNK, {}, 1.0, True, lambda m: None)
+    assert len(model.calls) == 1
+    stubborn = FakeModel(short_seconds=0.5)                                       # ignore même la durée imposée
+    stubborn.generate = lambda text, **kw: FakeModel(0.5).generate(text)         # (toujours trop court)
+    wav, seconds = tts_omnivoice.synthesize_chunk(stubborn, CHUNK, {}, 1.0, True, lambda m: None)
+    assert seconds == 0.5                                                          # on garde le meilleur, sans boucler

@@ -28,7 +28,7 @@ automatiquement ; une valeur invalide retombe sur le défaut avec un avertisseme
 - [`[drive]`](#drive) : Google Drive
 - [`[regles]`](#regles) : Google Gemini : questions de règles (/regle) et génération du contexte de campagne (/campagne)
 - [`[campagnes]`](#campagnes) : Campagnes de jeu de rôle (commande /campagne)
-- [`[voix]`](#voix) : Voix du bot (Chatterbox) : « Dans l'épisode précédent… » dicté dans le canal vocal
+- [`[voix]`](#voix) : Voix du bot (OmniVoice ou Chatterbox) : « Dans l'épisode précédent… » dicté dans le canal vocal
 
 ## discord
 
@@ -204,18 +204,20 @@ automatiquement ; une valeur invalide retombe sur le défaut avec un avertisseme
 
 ## voix
 
-*Voix du bot (Chatterbox) : « Dans l'épisode précédent… » dicté dans le canal vocal*
+*Voix du bot (OmniVoice ou Chatterbox) : « Dans l'épisode précédent… » dicté dans le canal vocal*
 
 | Clé | Type | Défaut | Valeurs admises | Rôle |
 |---|---|---|---|---|
 | `activer` | oui / non | `non` |  | Active la voix du bot (nécessite install_voix.bat). Désactivée : aucune synthèse vocale, aucune lecture. |
 | `au_demarrage` | oui / non | `oui` |  | Au /record, le bot dicte dans le canal vocal le « précédemment » de la dernière séance (audio préparé à l'avance). |
-| `python` | texte | *(vide)* |  | Python de l'environnement de la voix (vide = celui écrit par install_voix.bat, sinon celui du bot). |
-| `langue` | texte | `fr` | ne peut pas être vide | Langue lue (code Chatterbox : fr, en, es...). |
-| `voix_reference` | texte | *(vide)* |  | Échantillon audio (~10 s) de la voix à imiter, valable pour toutes les campagnes ; une campagne peut avoir sa propre voix en plaçant voix.wav dans son dossier. Vide et sans voix.wav = voix par défaut. À n'utiliser qu'avec l'accord de la personne dont c'est la voix. |
+| `moteur` | texte | `omnivoice` | omnivoice ou chatterbox | Moteur de synthèse : omnivoice (install_omnivoice.bat) ou chatterbox (install_voix.bat). Changer de moteur invalide les audios déjà préparés. |
+| `python` | texte | *(vide)* |  | Python de l'environnement de la voix (vide = celui écrit par l'installeur du moteur choisi, sinon celui du bot). |
+| `langue` | texte | `fr` | ne peut pas être vide | Langue lue (code à deux lettres : fr, en, es...). |
+| `voix_reference` | texte | *(vide)* |  | Échantillon audio (~10 s) de la voix à imiter, valable pour toutes les campagnes ; une campagne peut avoir sa propre voix en plaçant voix.wav dans son dossier. Vide et sans voix.wav = voix par défaut. Avec OmniVoice, un fichier texte du même nom (voix.txt) donne la transcription de l'échantillon ; sans lui, OmniVoice la devine avec Whisper. À n'utiliser qu'avec l'accord de la personne dont c'est la voix. |
 | `device` | texte | *(vide)* | cuda, cpu ou vide | cuda ou cpu (vide = automatique). |
-| `vitesse` | nombre | `1.15` | un nombre de 0.5 à 2.0 | Vitesse de lecture (1.0 = normale, 1.15 = un peu plus rapide). Appliquée sans changer la hauteur de la voix. Entre 0.5 et 2.0. |
+| `vitesse` | nombre | `1.0` | un nombre de 0.5 à 2.0 | Vitesse de lecture (1.0 = normale, 1.15 = un peu plus rapide). Appliquée sans changer la hauteur de la voix. Entre 0.5 et 2.0. |
 | `pause_s` | nombre | `0.25` | un nombre de 0 à 3 | Silence (s) entre deux morceaux de texte (avant accélération). |
-| `temperature` | nombre | `0.6` | un nombre de 0.1 à 1.5 | Variabilité de la synthèse (0.8 = défaut de Chatterbox). 0.6 limite les mots farfelus et les bruits ; trop bas, la voix devient monotone. Si un audio est raté, relance avec /campagne audio force. |
+| `etapes` | entier | `32` | un entier de 4 à 128 | OmniVoice : nombre d'étapes de génération (32 = qualité recommandée, 16 = plus rapide). Sans effet avec Chatterbox. |
+| `temperature` | nombre | `0.6` | un nombre de 0.1 à 1.5 | Chatterbox uniquement. Variabilité de la synthèse (0.8 = défaut de Chatterbox). 0.6 limite les mots farfelus et les bruits ; trop bas, la voix devient monotone. Si un audio est raté, relance avec /campagne audio force. |
 | `mots` | entier | `110` | un entier de 30 à 400 | Longueur visée (en mots) du « précédemment » demandé à l'IA dans les prompts. ~110 mots = environ 40 s à voix haute. Ne change pas un texte déjà écrit. |
 | `delai_s` | entier | `900` | un entier >= 30 | Temps maximal (s) d'une synthèse vocale. |
