@@ -16,6 +16,10 @@ def install():
     d.Client = Client
     d.Intents = types.SimpleNamespace(default=lambda: object())
     d.Interaction = type("Interaction", (), {})
+    d.Attachment = type("Attachment", (), {})
+    d.Member = type("Member", (), {})
+    d.File = lambda path, **kw: ("file", str(path))
+    d.FFmpegPCMAudio = lambda path, **kw: ("ffmpeg", str(path))
     d.Embed = type("Embed", (), {
         "__init__": lambda s, **k: [s.__dict__.update(k), setattr(s, "fields", [])] and None,
         "add_field": lambda s, **k: s.fields.append(k),
@@ -35,6 +39,9 @@ def install():
 
         def command(self, name, description=""):
             def deco(fn):
+                fn.description = description
+                fn.autocompletes = {}
+                fn.autocomplete = lambda param: (lambda cb: (fn.autocompletes.__setitem__(param, cb), cb)[1])
                 self.commands[name] = fn
                 return fn
             return deco
@@ -52,7 +59,14 @@ def install():
 
     a.CommandTree, a.AppCommandError = Tree, Exception
     a.Range, a.Choice = Generic, Generic
-    a.describe = a.choices = a.guild_only = lambda *args, **kwargs: (lambda fn: fn)
+    def describe(**kwargs):
+        def deco(fn):
+            fn.param_descriptions = kwargs
+            return fn
+        return deco
+
+    a.describe = describe
+    a.choices = a.guild_only = lambda *args, **kwargs: (lambda fn: fn)
     d.app_commands = a
 
     ext = types.ModuleType("discord.ext")

@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 from voicebot.audio import SessionRecorder, Track
-from voicebot.config import load_config
+from voicebot.config import SET, load_config
 from voicebot.constants import RATE
 from voicebot.drive import DriveClient
 from voicebot.pipeline import PIPELINE_STEPS, StatusBoard, run_pipeline
@@ -138,7 +138,7 @@ def test_traitement_complet(cfg_file, session, drive):
     assert board.count("✅") == 5, board
     assert res["link"].endswith("dir_2026-10-30_120000") and res["shared"] is True
     names = [b["name"] for b in drive.fake.uploaded]
-    assert sorted(names) == sorted(["transcript_live.txt", "rapport.pdf", "timpatim.mp3", "Zoé.mp3"])
+    assert sorted(names) == sorted(["transcript_nettoye.txt", "rapport.pdf", "timpatim.mp3", "Zoé.mp3"])
     assert drive.fake.permissions == [{"type": "anyone", "role": "reader"}]
     assert (session.dir / "stats.json").exists() and res["report"].read_bytes().startswith(b"%PDF")
     assert all(p.stat().st_size > 1000 for p in res["mp3"])
@@ -151,8 +151,8 @@ def test_etapes_desactivees_dans_config_ini(cfg_file, session, drive):
         text = text.replace(old, new, 1)
     cfg_file.write_text(text, encoding="utf-8")
     res, board = process(session, load_config(), drive)
-    assert board.count("⏭️") == 2 and "Google Drive — 1 fichier(s)" in board
-    assert [b["name"] for b in drive.fake.uploaded] == ["transcript_live.txt"]
+    assert board.count("⏭️") == 3 and "Google Drive — 1 fichier(s)" in board
+    assert [b["name"] for b in drive.fake.uploaded] == ["transcript_nettoye.txt"]
     assert drive.fake.permissions == [] and res["shared"] is False
 
 
@@ -170,7 +170,7 @@ def test_echec_d_une_etape_n_arrete_pas_les_suivantes(cfg_file, session, drive, 
     cfg["mp3"] = False
     res, board = process(session, cfg, drive)
     assert "❌ Rapport PDF — PDF cassé" in board and "✅ Google Drive" in board
-    assert [b["name"] for b in drive.fake.uploaded].count("transcript_live.txt") == 1
+    assert [b["name"] for b in drive.fake.uploaded].count("transcript_nettoye.txt") == 1
 
 
 @needs_ffmpeg
@@ -190,3 +190,24 @@ def test_drive_non_configure(tmp_path, monkeypatch):
     client.start()
     assert not client.wait_ready(timeout=5) and client.state == "not_configured"
     assert "introuvable" in client.problem()
+
+
+def test_transcript_nettoye_depose_a_la_place_du_brut(cfg_file, session, drive, monkeypatch):
+    rows = [{"user": "11", "name": "timpatim", "start": 1.0, "end": 2.0, "text": "euh", "source": "live"},
+            {"user": "11", "name": "timpatim", "start": 3.0, "end": 4.0, "text": "J'attaque le gobelin.", "source": "live"},
+            {"user": "11", "name": "timpatim", "start": 5.0, "end": 6.0, "text": "avec mon épée.", "source": "live"}]
+    (session.dir / "transcript_live.jsonl").write_text("\n".join(json.dumps(r) for r in rows), encoding="utf-8")
+    text = cfg_file.read_text(encoding="utf-8")
+    cfg_file.write_text(text.replace("mp3 = oui", "mp3 = non").replace("rapport = oui", "rapport = non")
+                        .replace("drive_audio = oui", "drive_audio = non"), encoding="utf-8")
+    res, _ = process(session, load_config(), drive)
+    assert [b["name"] for b in drive.fake.uploaded] == ["transcript_nettoye.txt"]
+    clean = (session.dir / "transcript_nettoye.txt").read_text(encoding="utf-8")
+    assert "euh" not in clean and "[00:00:03] timpatim: J'attaque le gobelin." in clean
+    assert "[00:00:05] timpatim: avec mon épée." in clean                    # pas de fusion : horodatage de chaque réplique
+    assert "euh" in (session.dir / "transcript_live.txt").read_text(encoding="utf-8")       # le brut reste en local
+    cfg_file.write_text(cfg_file.read_text(encoding="utf-8").replace("drive_transcript_brut = non", "drive_transcript_brut = oui"),
+                        encoding="utf-8")
+    drive.fake.uploaded.clear()
+    process(session, load_config(), drive)
+    assert sorted(b["name"] for b in drive.fake.uploaded) == ["transcript_live.txt", "transcript_nettoye.txt"]

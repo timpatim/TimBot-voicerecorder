@@ -1,4 +1,5 @@
 """Moteur WhisperX : chargé une fois au démarrage du programme et partagé entre les sessions."""
+import gc
 import threading
 import time
 
@@ -12,10 +13,10 @@ class WhisperEngine:
 
     STATE_TEXT = {"idle": "en attente", "loading": "chargement du modèle…",
                   "loading_align": "chargement de l'alignement…", "ready": "prêt",
-                  "failed": "indisponible"}
+                  "failed": "indisponible", "released": "libéré (préparation de la voix)"}
 
     def __init__(self):
-        self.state = "idle"            # idle | loading | loading_align | ready | failed
+        self.state = "idle"            # idle | loading | loading_align | ready | released | failed
         self.error = None
         self.device = self.lang = self.batch = self.whisperx = None
         self.model = self.align_model = self.align_meta = None
@@ -34,10 +35,32 @@ class WhisperEngine:
     def state_text(self) -> str:
         return self.STATE_TEXT[self.state]
 
+    def release(self) -> bool:
+        """Libère le modèle de la mémoire (GPU compris), par exemple avant de lancer la synthèse vocale.
+        Attend la fin d'un chargement ou d'un calcul en cours. `start_loading()` le recharge. -> True si libéré."""
+        if self.state == "idle":
+            return False
+        self._done.wait()
+        with self._lock:
+            if self.state != "ready":
+                return False
+            self.model = self.align_model = self.align_meta = None
+            self.state = "released"
+        gc.collect()
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            pass
+        print("[whisper] modèle libéré de la mémoire")
+        return True
+
     def start_loading(self):
-        if self.state != "idle":
+        if self.state not in ("idle", "released"):
             return
         self.state = "loading"
+        self._done.clear()
         threading.Thread(target=self._load, daemon=True, name="whisper-load").start()
 
     def wait_ready(self) -> bool:

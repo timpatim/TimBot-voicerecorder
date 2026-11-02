@@ -14,7 +14,7 @@ def build():
 
 def test_commandes_declarees():
     bot, _ = build()
-    assert set(bot.tree.commands) == {"record", "stop", "transcript", "regle", "stats", "status", "config"}
+    assert set(bot.tree.commands) == {"record", "stop", "transcript", "regle", "campagne", "stats", "status", "config"}
     assert bot.tree.error_handler is not None
 
 
@@ -30,3 +30,12 @@ def test_statut_de_presence_suit_l_etat_de_whisper():
 def test_close_all_sans_session():
     bot, _ = build()
     bot.close_all()
+
+
+def test_limites_discord_sur_les_descriptions():
+    """Discord refuse la synchronisation si une description dépasse 100 caractères (ou un nom 32)."""
+    bot, _ = build()
+    for name, fn in bot.tree.commands.items():
+        assert len(name) <= 32 and 1 <= len(fn.description) <= 100, name
+        for param, text in getattr(fn, "param_descriptions", {}).items():
+            assert 1 <= len(text) <= 100, f"/{name} {param} : {len(text)} caractères"

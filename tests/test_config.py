@@ -107,3 +107,30 @@ def test_regex_invalide_refusee():
 
 def test_set_global_contient_tous_les_parametres():
     assert all(key in SET.values for key, *_ in SETTINGS)
+
+
+def test_la_page_wiki_configuration_est_a_jour(tmp_path):
+    """wiki/Configuration.md est générée : `python tools/make_wiki.py` après toute modification des paramètres."""
+    import subprocess
+    import sys
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    target = root / "wiki" / "Configuration.md"
+    before = target.read_text(encoding="utf-8")
+    try:
+        subprocess.run([sys.executable, str(root / "tools" / "make_wiki.py")], check=True, capture_output=True)
+        assert target.read_text(encoding="utf-8") == before, "wiki/Configuration.md périmée : lancez python tools/make_wiki.py"
+    finally:
+        target.write_text(before, encoding="utf-8", newline="\n")
+
+
+def test_la_page_wiki_commandes_cite_toutes_les_commandes_et_actions():
+    from pathlib import Path
+    from tests.test_commands import build
+    from voicebot.commands import CAMPAGNE_ACTIONS
+    page = (Path(__file__).resolve().parents[1] / "wiki" / "Commandes.md").read_text(encoding="utf-8")
+    bot, _ = build()
+    for name in bot.tree.commands:
+        assert f"`/{name}`" in page, f"/{name} absente de wiki/Commandes.md"
+    for action in CAMPAGNE_ACTIONS:
+        assert f"| `{action}`" in page, f"action « {action} » absente de wiki/Commandes.md"

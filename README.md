@@ -148,6 +148,7 @@ Le modèle Whisper se charge dès le démarrage (état visible dans la console e
 | `/stop` | Arrête et lance le traitement de fin de session |
 | `/transcript [nombre]` | Affiche les derniers messages transcrits, visibles de tous |
 | `/regle [jeu] [phrases]` | Envoie les dernières phrases du transcript à Gemini pour expliquer/préciser la règle évoquée. `jeu` : défaut *Pathfinder première édition* ; `phrases` : défaut 15 |
+| `/campagne action [nom] [jeu] [mj] [fichier]` | Gère les campagnes : `liste`, `info`, `nouvelle` (membres du canal vocal = joueurs ; `mj` optionnel, sinon à définir), `mj` (désigne le MJ), `joueur` (ajoute ou met à jour un joueur : `membre`, `personnage` rapproché des personnages de `contexte.md`), `choisir`, `contexte` (Gemini structure un texte joint en `contexte.md`), `journal` (importe le journal existant comme résumé global initial), `rollback` (annule la dernière version du résumé global et la séance associée), `afficher` (compte rendu, « précédemment » ou résumé global ; `session:` propose la liste des séances, `rubrique:` n'affiche qu'une rubrique du résumé : fils ouverts, lieux, alliés…), `dicter` (le bot lit à voix haute le « précédemment » ou le compte rendu dans le canal vocal), `pack` (prépare les prompts à coller dans un chat), `integrer` (réinjecte la réponse relue), `resumer` (variante avec appels à l'API Gemini). Tout sauf `liste`, `info` et `afficher` demande « Gérer le serveur ». |
 | `/stats` | Statistiques de la session en cours |
 | `/status` | État de Whisper, de Drive et de la file d'attente |
 | `/config` | Affiche/modifie les étapes de fin de session (permission *Gérer le serveur*) |
@@ -171,7 +172,9 @@ Au premier lancement, `config.ini` est créé avec les valeurs par défaut et to
 | `[fin_de_session]` | étapes activées : `mp3`, `rapport`, `drive`, `drive_audio`, `partage` |
 | `[mp3]` | débit, chemin de ffmpeg |
 | `[drive]` | identifiants, jeton, dossier racine |
-| `[regles]` | commande `/regle` : clé Gemini, modèle, jeu par défaut, nombre de phrases, consigne |
+| `[regles]` | accès Gemini (clé, modèle, réflexion) et commande `/regle` : jeu par défaut, nombre de phrases, consigne |
+| `[voix]` | voix du bot (Chatterbox) : activation, lecture au `/record`, voix de référence, langue, Python de l'environnement dédié |
+| `[campagnes]` | commande `/campagne` et mémoire de campagne : dossier, tailles maximales, packs (`pack_auto`, `pack_minutes`), génération par API (`resume_auto`, tranches, délai) |
 
 Les étapes de `[fin_de_session]` sont relues à chaque `/stop`, sans redémarrer.
 
@@ -240,8 +243,78 @@ voicebot/
 tools/               # install_torch, check_env, make_config_example
 ```
 
-Après toute modification des paramètres : `python tools/make_config_example.py` (un test vérifie que `config.example.ini` est à jour).
+Après toute modification des paramètres : `python tools/make_config_example.py` et `python tools/make_wiki.py` (un test vérifie que `config.example.ini` et `wiki/Configuration.md` sont à jour).
+
+### Wiki
+
+Le dossier [`wiki/`](wiki) contient la documentation détaillée : `Home.md` (vue d'ensemble, installation, déroulement), `Commandes.md` (toutes les commandes) et `Configuration.md` (toutes les clés de `config.ini` avec leurs défauts, générée). Pour la publier sur GitHub : activez le Wiki du dépôt, créez une première page, puis
+
+```bash
+git clone https://github.com/timpatim/TimBot-voicerecorder.wiki.git
+cp wiki/*.md TimBot-voicerecorder.wiki/
+cd TimBot-voicerecorder.wiki && git add . && git commit -m "Mise à jour du wiki" && git push
+```
 
 ## 📄 Licence
 
 Aucune licence n'est encore définie : ajoutez un fichier `LICENSE` de votre choix avant de publier.
+
+## Campagnes (`/campagne`)
+
+Chaque campagne a son dossier dans `campagnes/` : `campagne.json`, `joueurs.json` (MJ et joueurs, repérés par **identifiant Discord** puisque les pseudos changent), `contexte.md`, `seances/`, `resume_global/`. La campagne active est celle choisie en dernier ; `/record` l'affiche sous le message de consentement et en garde la trace dans `campagne.json` du dossier de session.
+
+1. Rejoignez le canal vocal puis `/campagne nouvelle nom:Hell's Rebels mj:@quelqu'un` : les membres du canal sont pré-remplis (le MJ n'est jamais déduit ; sans `mj`, utilisez `/campagne mj` plus tard).
+2. `/campagne contexte fichier:description.txt` : Gemini restructure votre texte (personnages, secrets, glossaire) en `contexte.md`, et associe les personnages aux joueurs. **Aucun secret n'est déduit** : sans indication explicite, un fait est marqué `[à confirmer]`. Si `contexte.md` est déjà rempli, la proposition va dans `contexte_propose.md`.
+3. Relisez et corrigez à la main : tout reste en fichiers texte modifiables.
+
+Confidentialité : le texte envoyé à `/campagne contexte` part chez Google (Gemini).
+
+### Reprendre une campagne existante (ex. Hell's Rebels)
+
+1. `/campagne nouvelle` (depuis le canal vocal, avec `mj:`), 2. `/campagne contexte fichier:personnages.txt`, 3. `/campagne journal fichier:journal.txt` : le journal devient la version 1 du résumé global (`resume_global/v001_…`).
+
+### Mémoire de campagne sans API : les packs
+
+Sans payer d'API, le bot prépare le travail et vous utilisez le chat de votre choix (Gemini, Claude…).
+
+1. **Fin de session** (ou `/campagne pack`) : le bot écrit dans `seances/<session>/pack/` un ou plusieurs fichiers `pack_*.md`, les publie dans le salon et les dépose sur le Drive. Chaque fichier contient les consignes, le contexte, le résumé global actuel et le transcript nettoyé **avec l'horodatage de chaque réplique**. Par défaut, un seul pack par séance. Si votre chat ne lit pas les longs fichiers jusqu'au bout (c'était le cas de Gemini), découpez en parties : `pack_minutes = 60` dans `[campagnes]`, ou `minutes:60` dans `/campagne pack` (`0` = pas de découpe).
+2. **Dans le chat** : si le pack est découpé, collez les parties dans l'ordre, dans la **même conversation** (copiez le contenu du fichier). Chaque réponse commence par `=== FIN LUE === hh:mm:ss | « dernière réplique »` : l'horodatage et le texte de la dernière réplique lue, à comparer à la « fin attendue » et à la dernière réplique indiquées par le bot. Un écart signale une lecture tronquée. La dernière partie produit aussi le compte rendu, la mise à jour du résumé global et le « précédemment ».
+3. **Relisez et corrigez** la réponse (vérifiez les secrets), enregistrez-la dans un fichier texte, puis `/campagne integrer fichier:reponse.txt`. Le bot vérifie la fin de lecture (avertissement si l'horodatage s'écarte, si la réplique citée n'existe pas parmi les dernières du transcript, ou si les notes s'arrêtent loin de la fin), range le compte rendu dans la séance, crée la version suivante du résumé global et mémorise le « précédemment » pour le prochain `/record`. `rollback` annule l'intégration.
+
+Les réponses doivent contenir les lignes `=== COMPTE RENDU ===`, `=== RESUME GLOBAL ===` et `=== PRECEDEMMENT ===`. Si le modèle les oublie, redemandez-les. `pack_auto = non` désactive la préparation automatique en fin de session. Les packs contiennent votre contexte et le transcript : ils sont envoyés à l'outil que vous choisissez de les coller.
+
+### Mémoire automatique par API (optionnelle)
+
+Désactivée par défaut (`resume_auto = non`), car elle consomme beaucoup de requêtes Gemini (une séance de 3 h = une dizaine d'appels, ce que le palier gratuit de l'API ne supporte pas). Si vous l'activez, qu'une campagne est active et qu'une clé Gemini est configurée, l'étape « Mémoire de campagne » enchaîne : nettoyage du transcript (rôles par identifiant Discord, interjections retirées), extraction des faits par tranche de 30 min, **compte rendu** (publié dans le salon et déposé sur le Drive), **nouvelle version du résumé global** et **« Dans l'épisode précédent… »**, affiché au prochain `/record` sous le message de consentement. Tout est écrit dans `campagnes/<nom>/seances/<session>/` (`compte_rendu.md`, `precedemment.md`, `extractions.md`, `transcript_nettoye.txt`). Le résumé global n'est modifié qu'une fois toutes les étapes réussies ; en cas d'échec de Gemini, `/campagne resumer` relance sans rien perdre. Les secrets marqués `[secret:…]` / `[mj]` dans `contexte.md` ne doivent pas apparaître dans ces textes lus par tous : relisez-les au début.
+
+`/campagne resumer fichier:transcript.txt session:2026-10-24` intègre un ancien transcript (formats du bot, entre crochets ou SRT) ; sans fichier, il reprend la dernière session enregistrée (ou celle de `session`). Attention : le journal importé et les séances peuvent se recouper ; Gemini fusionne sans doublon.
+
+Confidentialité : le transcript nettoyé et le contexte sont envoyés à Google (Gemini).
+
+### Retour en arrière
+
+Chaque mise à jour du résumé global (import du journal, fin de session) crée une nouvelle version `vNNN_*.md` (jamais écrasée). `/campagne rollback` annule la dernière : elle est archivée dans `resume_global/annulees/` et la précédente redevient le résumé actif. Répétez pour remonter plus loin.
+
+## Transcript nettoyé
+
+À la fin de session, en plus du transcript brut (`transcript_live.txt`, conservé en local), le bot écrit `transcript_nettoye.txt`, sans appel à Gemini. Le nettoyage est volontairement prudent : **une ligne par réplique, avec son locuteur et son horodatage d'origine**, dans l'ordre chronologique. Seuls les sons sans sens (« euh », « hum », « hmm »…) sont retirés (`nettoyage_mots_ignores`) ; « oui », « non », « ok » sont conservés car ce sont des réponses. Aucune fusion de répliques par défaut (`nettoyage_fusion_s = 0`) ; si vous mettez une valeur, la fusion ne se fait jamais par-dessus la réplique d'un autre locuteur. Si une campagne est active, les locuteurs y apparaissent comme « MJ » / « Personnage (joueur) ». **C'est ce fichier qui est déposé sur le Drive** ; mettez `drive_transcript_brut = oui` dans `[fin_de_session]` pour y déposer aussi le brut.
+
+Avec un transcript joint (`pack` ou `resumer` avec `fichier`), le paramètre `session` est obligatoire (`2026-10-24` ou `2026-10-24_190000`) : il donne la date de la séance.
+
+## Voix du bot (Chatterbox, optionnelle)
+
+Le bot peut dicter à voix haute le « Dans l'épisode précédent… » (et seulement lui) au démarrage d'un enregistrement, et à la demande avec `/campagne dicter` (`session:` pour une autre séance). La synthèse vocale utilise [Chatterbox](https://github.com/resemble-ai/chatterbox) (modèle multilingue, français inclus, licence MIT). **Désactivée par défaut.**
+
+**Principe : le bot ne lit qu'un fichier audio préparé à l'avance, il ne synthétise jamais pendant un enregistrement.** Whisper et Chatterbox ne doivent pas être chargés en même temps : pour préparer un audio, le bot **libère Whisper de la mémoire, lance Chatterbox, puis recharge Whisper** (quelques dizaines de secondes, l'état s'affiche dans le statut du bot).
+- L'audio (`seances/<session>/precedemment.wav`) est préparé **automatiquement après `/campagne integrer`**, ou avec **`/campagne audio`** (permission « Gérer le serveur »). `/campagne audio` est refusée pendant un enregistrement, et `/record` est refusé pendant une synthèse.
+- Si l'audio n'est pas prêt (ou si le « précédemment » a été modifié depuis), `/record` et `/campagne dicter` le signalent et ne disent rien.
+
+Installation :
+1. Lancez `install_voix.bat` : il crée un environnement conda **séparé** (`voicerecorder-voix`, Python 3.11), y installe `chatterbox-tts` puis lui donne un PyTorch GPU de la même version. Le bot l'appelle comme un programme externe ; son environnement n'est pas touché. Le premier lancement télécharge le modèle (plusieurs Go).
+2. Dans `config.ini`, section `[voix]` : `activer = oui`. `au_demarrage = non` désactive seulement la lecture au `/record`.
+3. **Voix** : par défaut, la voix de Chatterbox. Si un fichier `voix.wav` (ou `.mp3`, `.flac`, ~10 s de parole claire) existe dans le dossier de la campagne, ou si `voix_reference` pointe vers un échantillon, Chatterbox imite cette voix (celle de la campagne prime). N'utilisez que la voix d'une personne qui a donné son accord. Changer de voix invalide l'audio : refaites `/campagne audio`.
+
+4. **Durée et rythme** : `vitesse` (1.15 par défaut, de 0.5 à 2.0) accélère la lecture sans changer la hauteur de la voix (via ffmpeg) ; `pause_s` règle le silence entre deux morceaux ; `mots` (110 par défaut, soit environ 40 s) fixe la longueur demandée à l'IA dans les prompts du « précédemment ». Ce dernier ne change pas un texte déjà écrit : modifiez `precedemment.md` ou refaites le pack. Chaque changement invalide l'audio : refaites `/campagne audio`.
+5. **Audio raté** (mots farfelus, bruits) : la synthèse varie d'un essai à l'autre. `/campagne audio force` en refait un nouveau même si l'audio est à jour ; l'ancien est gardé en `precedemment.precedent.wav` (et remis en place si la nouvelle synthèse échoue). Si les ratés sont fréquents, baissez `temperature` (0.6) dans `[voix]`.
+
+En cas d'échec, le bot l'indique et l'enregistrement continue. La voix du bot n'est pas transcrite.

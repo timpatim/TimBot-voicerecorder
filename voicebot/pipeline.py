@@ -6,7 +6,13 @@ import subprocess
 import threading
 import time
 
+from pathlib import Path
+
+from .campagne import CampaignError, CampaignStore
 from .config import SET
+from .gemini import GeminiError, api_key
+from .memoire import summarize_session, write_clean_transcript
+from .pack import build_packs
 from .drive import DriveClient
 from .mp3 import convert_to_mp3
 from .report import build_report
@@ -73,15 +79,63 @@ class StatusBoard:
 
 # --- le traitement lui-même ---
 
+def _active_campaign(rec):
+    """Campagne enregistrée au /record dans le dossier de session, ou None."""
+    try:
+        slug = json.loads((rec.dir / "campagne.json").read_text(encoding="utf-8"))["campagne"]
+        return CampaignStore(Path(SET["campagnes.dossier"])).get(slug)
+    except (OSError, KeyError, ValueError, CampaignError):
+        return None
+
+
+def _memoire_step(rec, res, board):
+    """Étape facultative : ne bloque jamais la suite.
+
+    Avec une clé Gemini et `resume_auto` : génération complète (retourne ses résultats). Sinon, si `pack_auto` :
+    préparation des packs à coller dans un chat (res["pack"]). Retourne le dict de la génération ou None."""
+    info = rec.dir / "campagne.json"
+    use_gemini = SET["campagnes.resume_auto"] and bool(api_key())
+    if not info.exists():
+        board.update("memoire", "skipped", "aucune campagne active")
+        return None
+    if not use_gemini and not SET["campagnes.pack_auto"]:
+        board.update("memoire", "skipped", "pas de clé Gemini" if SET["campagnes.resume_auto"] else "désactivé")
+        return None
+    try:
+        campaign = _active_campaign(rec)
+        if campaign is None:
+            raise CampaignError("campagne introuvable")
+        rows = read_rows(rec.dir / "transcript_live.jsonl")
+        if not use_gemini:
+            board.update("memoire", "running", "préparation des packs")
+            made = build_packs(campaign, rows, rec.session_id)
+            res["pack"] = {**made, "titre": campaign.titre}
+            board.update("memoire", "ok", f"{len(made['fichiers'])} pack(s) à coller dans un chat")
+            return None
+        board.update("memoire", "running", "préparation")
+        out = summarize_session(campaign, rows, rec.session_id, lambda t: board.update("memoire", "running", t))
+    except (CampaignError, GeminiError, KeyError, ValueError) as e:
+        board.update("memoire", "failed", str(e).splitlines()[0][:150])
+        res["notes"].append(f"Mémoire de campagne non mise à jour : {e}\nRelance avec `/campagne pack`.")
+        return None
+    except Exception as e:
+        board.update("memoire", "failed", repr(e)[:150])
+        res["notes"].append(f"Mémoire de campagne non mise à jour : {e!r}")
+        return None
+    board.update("memoire", "ok", f"{campaign.titre} — {out['version']}")
+    return {**out, "titre": campaign.titre}
+
+
 PIPELINE_STEPS = [("asr", "Fin de la transcription"), ("transcript", "Transcript et statistiques"),
-                  ("mp3", "Conversion MP3"), ("rapport", "Rapport PDF"), ("drive", "Google Drive")]
+                  ("mp3", "Conversion MP3"), ("rapport", "Rapport PDF"),
+                  ("memoire", "Mémoire de campagne (Gemini)"), ("drive", "Google Drive")]
 
 
 def run_pipeline(rec: "SessionRecorder", live: "LiveTranscriber", cfg: dict, board: StatusBoard,
                  drive: DriveClient) -> dict:
     """Exécute les étapes l'une après l'autre. Une étape en échec n'empêche pas les suivantes."""
     res = {"stats": None, "transcript": None, "mp3": [], "report": None,
-           "link": None, "shared": False, "notes": []}
+           "link": None, "shared": False, "notes": [], "memoire": None, "transcript_clean": None, "pack": None}
 
     # 1. fin de la transcription : on laisse WhisperX vider sa file
     board.update("asr", "running")
@@ -104,6 +158,10 @@ def run_pipeline(rec: "SessionRecorder", live: "LiveTranscriber", cfg: dict, boa
     board.update("transcript", "running")
     try:
         res["transcript"] = write_final_transcript(rec)
+        rows = read_rows(rec.dir / "transcript_live.jsonl")
+        rows.sort(key=lambda r: (r["start"], r["end"]))
+        res["transcript_clean"] = rec.dir / "transcript_nettoye.txt"
+        write_clean_transcript(rows, res["transcript_clean"], f"Session {rec.session_id}", _active_campaign(rec))
         res["stats"] = stats = session_stats(rec)
         (rec.dir / "stats.json").write_text(json.dumps(stats, ensure_ascii=False, indent=2), encoding="utf-8")
         (rec.dir / "stats.txt").write_text(render_text(stats), encoding="utf-8")
@@ -137,13 +195,24 @@ def run_pipeline(rec: "SessionRecorder", live: "LiveTranscriber", cfg: dict, boa
         except Exception as e:
             board.update("rapport", "failed", str(e)[:150])
 
-    # 5. Google Drive
+    # 5. mémoire de campagne : compte rendu, résumé global, « précédemment »
+    res["memoire"] = _memoire_step(rec, res, board)
+
+    # 6. Google Drive
     if cfg["drive"]:
         files = []
-        if cfg["drive_transcript"] and res["transcript"]:
-            files.append((res["transcript"], None))
+        if cfg["drive_transcript"]:
+            clean = res["transcript_clean"] if res["transcript_clean"] and res["transcript_clean"].exists() else None
+            if clean:
+                files.append((clean, None))
+            if res["transcript"] and (clean is None or SET["fin_de_session.drive_transcript_brut"]):
+                files.append((res["transcript"], None))       # brut : seulement en secours ou sur demande
         if cfg["drive_rapport"] and res["report"]:
             files.append((res["report"], None))
+        if cfg["drive_transcript"] and res["memoire"]:
+            files.append((res["memoire"]["seance"] / "compte_rendu.md", None))
+        if cfg["drive_transcript"] and res["pack"]:
+            files += [(p, "pack") for p in res["pack"]["fichiers"]]
         if cfg["drive_audio"]:
             audio = res["mp3"] if cfg["mp3"] else sorted((rec.dir / "audio").glob("*.wav"))
             files += [(p, "audio") for p in audio]
