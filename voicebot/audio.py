@@ -117,6 +117,7 @@ class SessionRecorder(voice_recv.AudioSink):
         self.names: dict[int, str] = {}
         self.files: dict[int, str] = {}
         self.on_chunk = None               # callback(uid, start_sample, pcm_bytes)
+        self.ignored_ids: set = set()      # identifiants jamais enregistrés ni transcrits (le bot lui-même)
         self.closed = False
         self.total_samples = None          # durée figée à l'arrêt
         self._lock = threading.Lock()
@@ -130,7 +131,7 @@ class SessionRecorder(voice_recv.AudioSink):
         return False                       # on veut du PCM décodé
 
     def write(self, user, data):
-        if self.closed or user is None:
+        if self.closed or user is None or user.id in self.ignored_ids:
             return
         pcm = to_mono16k(data.pcm)
         if not pcm:

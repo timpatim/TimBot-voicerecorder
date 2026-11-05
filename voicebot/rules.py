@@ -7,7 +7,7 @@ from .config import SET
 from .gemini import GeminiError, api_key, generate
 
 RulesError = GeminiError          # nom historique, conservé pour les appelants et les tests
-__all__ = ["RulesError", "api_key", "transcript_lines", "build_instruction", "build_contents", "explain_rule"]
+__all__ = ["RulesError", "api_key", "transcript_lines", "build_instruction", "build_contents", "explain_rule", "explain_question"]
 
 
 def transcript_lines(rows: list, n: int) -> list:
@@ -32,3 +32,12 @@ def explain_rule(lines: list, jeu: str) -> str:
     if not lines:
         raise RulesError("Aucune phrase transcrite à analyser pour l'instant.")
     return generate(build_instruction(jeu), build_contents(lines, jeu))
+
+
+def explain_question(question: str, jeu: str) -> str:
+    """Question libre posée à Gemini, sans transcript (appel bloquant, à lancer dans un thread)."""
+    if not api_key():
+        generate("", "")
+    if not question.strip():
+        raise RulesError("Question vide.")
+    return generate(SET["regles.instruction_question"].replace("{jeu}", jeu), f"Jeu : {jeu}\n\nQuestion : {question.strip()}")

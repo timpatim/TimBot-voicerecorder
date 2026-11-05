@@ -172,6 +172,17 @@ def build_joueurs(mj: dict | None, players: list) -> dict:
     }
 
 
+def set_voix(campaign: Campaign, name: str) -> None:
+    """Enregistre la voix par défaut de la campagne dans campagne.json (« » = retour à la règle générale)."""
+    meta = _read_json(campaign.path / "campagne.json", {})
+    if name:
+        meta["voix"] = name
+    else:
+        meta.pop("voix", None)
+    _write_json(campaign.path / "campagne.json", meta)
+    campaign.meta = meta
+
+
 def set_mj(campaign: Campaign, member: dict) -> None:
     """Désigne le MJ (il sort de la liste des joueurs s'il y figurait)."""
     data = campaign.joueurs()

@@ -173,12 +173,11 @@ def test_etape_pipeline(camp, tmp_path):
 
 
 def test_etape_ignoree_sans_campagne_cle_ou_option(camp, tmp_path, monkeypatch):
-    monkeypatch.setitem(SET.values, "campagnes.pack_auto", False)
     assert run_memoire_step(fake_rec(tmp_path, False))[2] == ("skipped", "aucune campagne active")
     monkeypatch.setitem(SET.values, "regles.cle_api", "")
     assert run_memoire_step(fake_rec(tmp_path, True))[2] == ("skipped", "pas de clé Gemini")
     monkeypatch.setitem(SET.values, "campagnes.resume_auto", False)
-    assert run_memoire_step(fake_rec(tmp_path, True))[2] == ("skipped", "désactivé")
+    assert run_memoire_step(fake_rec(tmp_path, True))[2] == ("skipped", "à la demande : /campagne pack")
 
 
 def test_etape_echec_gemini_non_bloquante(camp, tmp_path, monkeypatch):
@@ -194,8 +193,9 @@ class Att:
     async def read(self): return self._b
 
 
-def test_commande_resumer_avec_transcript_joint(camp):
+def test_commande_resumer_avec_transcript_joint(camp, monkeypatch):
     c, _ = camp
+    monkeypatch.setitem(SET.values, "campagnes.moteur_resume", "gemini")          # ancienne méthode, toujours disponible
     bot, inter = make_bot(), FakeInter()
     inter.channel_id = 1
     cmd = bot.tree.commands["campagne"]

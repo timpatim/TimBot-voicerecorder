@@ -88,3 +88,55 @@ def wait_until(predicate, timeout=5.0):
             return True
         time.sleep(0.02)
     return False
+
+
+@pytest.fixture
+def clipboard(monkeypatch):
+    """Presse-papiers factice de la machine du bot : `.text` contient ce que le bot a copié (ou ce qu'il doit « coller »)."""
+    import types
+    from voicebot import presse_papiers
+    box = types.SimpleNamespace(text="")
+    monkeypatch.setattr(presse_papiers, "reason_unavailable", lambda: None)
+    monkeypatch.setattr(presse_papiers, "copy", lambda text: setattr(box, "text", text))
+    monkeypatch.setattr(presse_papiers, "paste", lambda: box.text)
+    return box
+
+
+@pytest.fixture(autouse=True)
+def pas_de_vrai_claude(monkeypatch):
+    """Aucun test ne doit lancer le vrai programme `claude` (abonnement, réseau) : il faut le simuler explicitement."""
+    from voicebot import claude_cli
+
+    def refuse(*a, **k):
+        raise AssertionError("appel réel à `claude` dans un test : utilise la fixture `faux_claude`")
+    monkeypatch.setattr(claude_cli, "_run", refuse)
+
+
+@pytest.fixture
+def faux_claude(monkeypatch):
+    """Simule le programme `claude` : renvoie la réponse programmée et enregistre la ligne de commande, l'entrée, l'environnement."""
+    import json
+    import subprocess
+    from voicebot import claude_cli
+    from voicebot.config import SET
+
+    class Faux:
+        answer = ""
+        result_extra: dict = {}
+        returncode = 0
+        stderr = ""
+        calls: list = []
+
+    faux = Faux()
+    faux.calls = []
+    monkeypatch.setattr(claude_cli.shutil, "which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setitem(SET.values, "campagnes.moteur_resume", "claude")
+
+    def run(argv, input=None, capture_output=None, timeout=None, cwd=None, env=None, creationflags=0):
+        faux.calls.append({"argv": argv, "input": input.decode("utf-8"), "cwd": cwd, "env": env, "timeout": timeout})
+        data = {"type": "result", "subtype": "success", "is_error": False, "result": faux.answer, "duration_ms": 54000,
+                "total_cost_usd": 0.13, "usage": {"input_tokens": 10, "cache_read_input_tokens": 190000, "cache_creation_input_tokens": 0,
+                                                  "output_tokens": 7700}, "modelUsage": {"claude-sonnet-5-5": {}}, **faux.result_extra}
+        return subprocess.CompletedProcess(argv, faux.returncode, json.dumps(data).encode("utf-8"), faux.stderr.encode("utf-8"))
+    monkeypatch.setattr(claude_cli, "_run", run)
+    return faux

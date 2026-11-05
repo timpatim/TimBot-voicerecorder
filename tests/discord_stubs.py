@@ -58,7 +58,11 @@ def install():
             pass
 
     a.CommandTree, a.AppCommandError = Tree, Exception
-    a.Range, a.Choice = Generic, Generic
+    class Choice(Generic):
+        def __init__(self, name=None, value=None):
+            self.name, self.value = name, value
+
+    a.Range, a.Choice = Generic, Choice
     def describe(**kwargs):
         def deco(fn):
             fn.param_descriptions = kwargs
@@ -66,6 +70,7 @@ def install():
         return deco
 
     a.describe = describe
+    a.rename = lambda **kwargs: (lambda fn: fn)
     a.choices = a.guild_only = lambda *args, **kwargs: (lambda fn: fn)
     d.app_commands = a
 

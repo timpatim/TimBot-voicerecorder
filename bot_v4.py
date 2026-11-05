@@ -11,10 +11,14 @@ d'environnement DISCORD_TOKEN. Commandes : /record, /stop, /transcript, /stats, 
 import atexit
 import sys
 
-from voicebot import __version__
+from voicebot import __version__, modeles
+
+modeles.apply()          # AVANT l'import de WhisperX / torch : ils lisent ces variables dès l'import
+
 from voicebot.client import RecorderBot
 from voicebot.commands import register
 from voicebot.config import SET, load_config
+from voicebot import voix
 from voicebot.drive import DriveClient
 from voicebot.whisper_engine import WhisperEngine
 
@@ -28,6 +32,8 @@ def main():
 
     print(f"[bot] version {__version__} — configuration : {SET.path.resolve()}")
     engine.start_loading()              # le modèle se charge dès le démarrage, en parallèle de la connexion à Discord
+    voix.purge_temp()                   # audios temporaires oubliés par un arrêt brutal
+    voix.preload()                      # idem pour le modèle vocal (OmniVoice), si Whisper n'est pas libéré pendant la synthèse
     if load_config()["drive"]:
         drive.start()                   # connexion Google Drive en arrière-plan (navigateur au tout premier lancement)
 

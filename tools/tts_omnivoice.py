@@ -13,6 +13,7 @@ Le README ne documente pas le paramètre de langue : il n'est transmis que si la
 """
 import argparse
 import inspect
+import json
 import os
 import sys
 
@@ -95,10 +96,10 @@ def synthesize_chunk(model, chunk, kwargs, speed, can_duration=True, log=print):
     return best, len(best) / SAMPLE_RATE
 
 
-def main(argv=None) -> int:
+def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--in", dest="src", required=True, help="fichier texte à lire")
-    ap.add_argument("--out", required=True, help="fichier WAV à écrire")
+    ap.add_argument("--in", dest="src", help="fichier texte à lire")
+    ap.add_argument("--out", help="fichier WAV à écrire")
     ap.add_argument("--lang", default="fr")
     ap.add_argument("--voice", default="", help="échantillon audio (~10 s) de la voix à imiter ; vide = voix choisie par le modèle")
     ap.add_argument("--voice-text", default="", help="transcription de l'échantillon (sinon OmniVoice la devine avec Whisper)")
@@ -106,20 +107,18 @@ def main(argv=None) -> int:
     ap.add_argument("--steps", type=int, default=32)
     ap.add_argument("--pause", type=float, default=0.25, help="silence (s) entre deux morceaux")
     ap.add_argument("--device", default="auto", choices=("auto", "cuda", "cpu"))
-    args = ap.parse_args(argv)
+    ap.add_argument("--serve", action="store_true",
+                    help="reste en marche : charge le modèle une fois, puis lit sur l'entrée standard une requête JSON par ligne "
+                         '({"argv": [...]}) et répond « TERMINE <code> » après chacune')
+    return ap
 
-    with open(args.src, encoding="utf-8") as f:
-        chunks = split_text(f.read(), MAX_CHARS)
-    if not chunks:
-        print("Texte vide.", file=sys.stderr)
-        return 2
 
-    import numpy as np
-    import soundfile as sf
+def load_model(device_arg: str):
+    """Charge OmniVoice. -> (modèle, paramètres acceptés par generate() ou None si **kwargs)."""
     import torch
     from omnivoice import OmniVoice
 
-    device = args.device
+    device = device_arg
     if device == "auto":
         device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Chargement d'OmniVoice ({device})...", flush=True)
@@ -131,10 +130,25 @@ def main(argv=None) -> int:
         accepted = None if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()) else set(params)
     except (TypeError, ValueError):
         accepted = None
+    return model, accepted
+
+
+def run_request(model, accepted, args) -> int:
+    """Synthétise le texte de args.src dans args.out avec un modèle déjà chargé."""
+    import numpy as np
+    import soundfile as sf
+
+    if not args.src or not args.out:
+        print("Il faut --in et --out.", file=sys.stderr)
+        return 2
+    with open(args.src, encoding="utf-8") as f:
+        chunks = split_text(f.read(), MAX_CHARS)
+    if not chunks:
+        print("Texte vide.", file=sys.stderr)
+        return 2
     kwargs, notes = pick_params(accepted, args)
     for note in notes:
         print(f"NOTE : {note}", flush=True)
-
     silence = np.zeros(int(SAMPLE_RATE * args.pause), dtype=np.float32)
     can_duration = accepted is None or "duration" in accepted
     pieces = []
@@ -149,6 +163,48 @@ def main(argv=None) -> int:
         print(SPEED_APPLIED, flush=True)
     print("OK", flush=True)
     return 0
+
+
+def serve(model, accepted, stdin=None, parser=None) -> None:
+    """Boucle du mode permanent : une requête JSON par ligne, réponse « TERMINE <code> ». Une erreur ne l'arrête pas."""
+    parser = parser or build_parser()
+    print("PRET", flush=True)
+    for line in (stdin or sys.stdin):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            args = parser.parse_args(json.loads(line)["argv"])
+            code = run_request(model, accepted, args)
+        except SystemExit:                                       # argparse a refusé les paramètres
+            code = 2
+            print("ERREUR paramètres invalides", flush=True)
+        except Exception as e:                                   # noqa: BLE001 - signalé au bot, le processus reste utilisable
+            code = 1
+            print(f"ERREUR {type(e).__name__}: {' '.join(str(e).split())[:300]}", flush=True)
+            try:
+                import torch
+                torch.cuda.empty_cache()
+            except Exception:
+                pass
+        print(f"TERMINE {code}", flush=True)
+
+
+def main(argv=None) -> int:
+    args = build_parser().parse_args(argv)
+    if args.serve:
+        model, accepted = load_model(args.device)
+        serve(model, accepted)
+        return 0
+    if not args.src or not args.out:
+        print("Il faut --in et --out (ou --serve).", file=sys.stderr)
+        return 2
+    with open(args.src, encoding="utf-8") as f:
+        if not split_text(f.read(), MAX_CHARS):
+            print("Texte vide.", file=sys.stderr)
+            return 2
+    model, accepted = load_model(args.device)
+    return run_request(model, accepted, args)
 
 
 if __name__ == "__main__":

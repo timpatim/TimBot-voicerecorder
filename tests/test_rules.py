@@ -217,3 +217,28 @@ def test_reflexion_valeur_invalide():
     with pytest.raises(ValueError):
         parse_setting("regles.reflexion", "turbo")
     assert parse_setting("regles.reflexion", "LOW") == "low"
+
+
+def test_regle_question_libre_sans_enregistrement_ni_transcript(bot_with_session, key, monkeypatch):
+    bot_with_session.sessions.clear()                                       # aucun enregistrement en cours
+    fake = FakeGenai(monkeypatch, text="Un jet de sauvegarde réussi divise les dégâts par deux.")
+    inter = run(bot_with_session, jeu="D&D 5e", question="Une   boule de feu\nrate-t-elle ?", phrases=3)
+    embed = inter.follow[0][1]["embed"]
+    assert "divise" in embed.description and embed.fields[0]["name"] == "Question"
+    call = fake.calls[0]
+    assert "Question : Une boule de feu rate-t-elle ?" in call["contents"] and "Zoé" not in call["contents"]
+    assert "question de règle précise" in call["config"].system_instruction and "D&D 5e" in call["config"].system_instruction
+
+
+def test_regle_question_trop_longue_ou_sans_cle(bot_with_session, key, monkeypatch):
+    monkeypatch.setitem(SET.values, "regles.question_max", 60)
+    inter = run(bot_with_session, question="x" * 61)
+    assert "trop longue" in inter.sent[-1][0]
+    monkeypatch.setattr("voicebot.commands.api_key", lambda: "")
+    inter = run(bot_with_session, question="Une question")
+    assert "clé" in inter.sent[-1][0].lower()
+
+
+def test_regle_sans_enregistrement_ni_question(bot_with_session, key):
+    bot_with_session.sessions.clear()
+    assert "question" in run(bot_with_session).sent[-1][0]

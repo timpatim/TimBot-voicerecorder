@@ -77,39 +77,59 @@ Sans Drive ni Gemini, le bot fonctionne normalement : ces étapes sont simplemen
 
 ### 3. Après la séance
 
-`/stop` lance le traitement de fin de session : transcript, MP3, rapport PDF, préparation des packs, envoi sur Drive.
+`/stop` lance le traitement de fin de session : transcript, MP3, rapport PDF, envoi sur Drive. Les packs se préparent à la demande avec `/campagne pack`.
 
-### 4. La mémoire de campagne : les packs
+### 4. La mémoire de campagne : `/campagne resumer`
+
+`/campagne resumer` prépare le pack, le soumet à Claude (le programme `claude` de votre abonnement, après un `claude` puis
+`/login` sur la machine du bot) et intègre la réponse. Le modèle ne renvoie que ce qui change : le programme ajoute la
+séance à la chronologie et ne remplace que les rubriques modifiées, les anciennes séances ne sont jamais réécrites.
+`/campagne rollback` annule. Réglages : section `[claude]`. Détails dans le README.
+
+Variante manuelle, les packs :
 
 Pour ne pas payer d'API, le bot prépare le travail et vous utilisez le chat de votre choix (Claude, Gemini…).
 
-1. Le bot écrit dans `seances/<session>/pack/` un fichier `pack_*.md` : consignes, contexte, résumé global actuel et
-   **transcript nettoyé avec l'horodatage de chaque réplique**. Il le publie dans le salon et le dépose sur le Drive.
-2. Collez-le dans le chat. La réponse commence par `=== FIN LUE === hh:mm:ss | « dernière réplique »`, qui permet de
-   vérifier que le modèle a lu le transcript jusqu'au bout.
-3. Relisez la réponse (surtout les secrets), enregistrez-la dans un fichier texte, puis
-   `/campagne integrer fichier:reponse.txt`. Le bot contrôle la fin de lecture, range le compte rendu, crée la version
-   suivante du résumé global et mémorise le « précédemment ».
+1. `/campagne pack` : le bot prépare un fichier `pack_*.md` (consignes, contexte, résumé global actuel et
+   **transcript nettoyé avec l'horodatage de chaque réplique**, rangé dans `seances/<session>/pack/`) et le **copie dans le
+   presse-papiers** de la machine du bot. `sortie:fichier` le publie à la place en fichier.
+2. Collez-le (Ctrl+V) dans le chat. La réponse commence par `=== FIN LUE === hh:mm:ss | « dernière réplique »`, qui permet
+   de vérifier que le modèle a lu le transcript jusqu'au bout. Pack découpé : `/campagne pack partie:2`, etc.
+3. Relisez la réponse (surtout les secrets), copiez-la avec le bouton du chat, puis `/campagne integrer` : le bot la lit
+   dans le presse-papiers (ou dans `fichier:` si vous préférez un fichier). Il contrôle la fin de lecture, range le compte
+   rendu, crée la version suivante du résumé global et mémorise le « précédemment ».
 4. `/campagne rollback` annule la dernière intégration (le résumé global est versionné, jamais écrasé).
 
-Si votre chat ne lit pas un long fichier en entier, découpez en parties avec `pack_minutes` ou `minutes:`.
+Le presse-papiers est celui de la **machine qui fait tourner le bot** (réglage `presse_papiers` de `[campagnes]`) : si votre client
+Discord est sur un autre ordinateur, mettez `presse_papiers = non` et utilisez les fichiers. Si votre chat ne lit pas un long
+texte en entier, découpez en parties avec `pack_minutes` ou `minutes:`.
 
 ### 5. La voix du bot (optionnelle)
 
-Le bot ne lit **que** le « précédemment », et seulement un fichier audio **préparé à l'avance** : il ne synthétise jamais
-pendant un enregistrement, pour ne pas avoir Whisper et Chatterbox en mémoire en même temps.
+Le bot lit le « précédemment » (fichier audio **préparé à l'avance**) et, avec `/dire`, n'importe quel texte. Réglage
+`liberer_whisper` de `[voix]` : `non` (défaut) garde Whisper en mémoire, la voix marche pendant un enregistrement mais il faut
+assez de mémoire GPU pour les deux (la console affiche la mémoire utilisée) ; avec OmniVoice le modèle est préchargé au démarrage du bot ; `oui` libère Whisper pendant la synthèse et
+refuse la voix pendant un enregistrement. La voix du bot n'est jamais transcrite.
 
 - Moteurs (`moteur` dans `[voix]`) : **OmniVoice** (par défaut) ou **Chatterbox**. Les poids d'OmniVoice sont sous licence
   CC-BY-NC (usage non commercial).
 - Installation : `install_omnivoice.bat` (ou `install_voix.bat` pour Chatterbox) crée un environnement conda séparé pour le
   moteur, puis `activer = oui` dans `[voix]`. Changer de moteur invalide les audios préparés.
-- Préparation : automatique après `/campagne integrer`, ou `/campagne audio` (refusée pendant un enregistrement). Whisper est
+- Préparation : automatique après `/campagne integrer`, ou `/campagne audio`. Avec `liberer_whisper = oui`, Whisper est
   libéré de la mémoire pendant la synthèse puis rechargé.
 - Pendant la préparation, un message affiche une barre de progression. Un morceau tronqué est détecté et régénéré.
+- Texte libre : `/dire texte:...` dit n'importe quel texte avec la même voix.
 - Audio raté : `/campagne audio force` en refait un autre ; l'ancien est gardé en `precedemment.precedent.wav`.
-- Voix : celle choisie par le moteur, ou une voix clonée à partir de `voix.wav` (~10 s de parole claire) placé dans le
-  dossier de la campagne. Avec OmniVoice, ajoutez `voix.txt` : la transcription de l'échantillon. **N'utilisez que la voix d'une personne qui a donné son accord.**
+- Voix : celle du moteur par défaut, ou une voix clonée à partir d'un échantillon `voix/voix.<nom>.wav` (~10 s de parole claire) ;
+  plusieurs voix possibles, choisies par campagne avec `/campagne voix` ou ponctuellement avec le paramètre `nom_voix` de `/dire` et
+  `/campagne audio`. Avec OmniVoice, ajoutez `voix/voix.<nom>.txt` : la transcription de l'échantillon. **N'utilisez que la voix d'une personne qui a donné son accord.**
 - Réglages : `vitesse`, `pause_s`, `etapes` (OmniVoice), `temperature` (Chatterbox), `mots` dans [`[voix]`](Configuration#voix).
+
+## Où sont les modèles ?
+
+Dans `modeles/` à côté du programme (`modeles/huggingface`, `modeles/torch`), pas dans `~/.cache`. Le réglage est `dossier`
+de [`[modeles]`](Configuration#modeles) ; vide = cache habituel. Les modèles déjà téléchargés ailleurs sont retéléchargés :
+copiez `~/.cache/huggingface/hub` dans `modeles/huggingface/` pour les réutiliser.
 
 ## Fichiers produits
 
@@ -125,6 +145,7 @@ sessions/2026-10-30_120000/
 ├── transcript_live.txt             # transcript final trié, horodaté
 ├── transcript_live_rejected.jsonl  # segments écartés (hallucinations, trop faibles)
 ├── stats.json / stats.txt
+├── avant_retranscription_<date>/   # ancien transcript, après un /retranscrire
 └── rapport.pdf
 ```
 
@@ -137,7 +158,6 @@ campagnes/<campagne>/
 ├── contexte.md                     # personnages, secrets, glossaire (à relire)
 ├── resume_global.md                # résumé actif
 ├── resume_global/vNNN_*.md         # toutes les versions (annulees/ pour les retours en arrière)
-├── voix.wav                        # voix de référence (optionnel)
 └── seances/<séance>/
     ├── transcript_nettoye.txt      # une ligne par réplique, avec locuteur et horodatage
     ├── compte_rendu.md

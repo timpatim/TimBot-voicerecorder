@@ -10,10 +10,21 @@ from .constants import RATE
 from .utils import fmt_ts
 
 
+class RecorderTree(app_commands.CommandTree):
+    async def interaction_check(self, interaction) -> bool:
+        """Avant chaque commande : une ligne de trace dans le salon des messages système (jamais bloquant)."""
+        from .commands import trace_command
+        try:
+            await trace_command(interaction)
+        except Exception as e:
+            print(f"[bot] trace impossible ({e!r})")
+        return True
+
+
 class RecorderBot(discord.Client):
     def __init__(self, engine):
         super().__init__(intents=discord.Intents.default())   # inclut voice_states
-        self.tree = app_commands.CommandTree(self)
+        self.tree = RecorderTree(self)
         self.sessions: dict[int, tuple] = {}                  # guild_id -> (rec, live, vc)
         self.engine = engine
         self._presence_task = None
@@ -27,6 +38,8 @@ class RecorderBot(discord.Client):
         else:
             synced = await self.tree.sync()
         print(f"[bot] commandes synchronisées : {[c.name for c in synced]}")
+        from .commands import CAMPAGNE_ACTIONS
+        print(f"[bot] actions de /campagne envoyées à Discord ({len(CAMPAGNE_ACTIONS)}) : {', '.join(CAMPAGNE_ACTIONS)}")
 
     async def on_ready(self):
         print(f"[bot] connecté en tant que {self.user}, serveurs : {[g.name for g in self.guilds]}")
