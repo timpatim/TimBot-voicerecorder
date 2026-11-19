@@ -107,3 +107,4 @@ class WhisperEngine:
                 except Exception as e:
                     print(f"[live] alignement échoué : {e!r}")
             return segs
+

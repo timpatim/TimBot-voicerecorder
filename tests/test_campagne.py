@@ -1,4 +1,4 @@
-"""Campagnes : store, joueurs.json, génération du contexte (Gemini simulé) et commande /campagne."""
+"""Campagnes : store, joueurs.json, génération du contexte (Claude simulé) et commande /campagne."""
 import asyncio
 import json
 import types
@@ -67,20 +67,20 @@ def test_choix_par_prefixe_et_ambiguite(store):
 def test_contexte_genere_remplit_template_et_personnages(store, monkeypatch):
     c = store.create("Hell's Rebels", "Pathfinder 1e", MJ, [MJ, P1, P2])
     seen = {}
-    monkeypatch.setattr(campagne.gemini, "generate",
-                        lambda ins, contents, **kw: seen.update(ins=ins, contents=contents) or REPONSE)
+    monkeypatch.setattr(campagne.claude_cli, "ask",
+                        lambda prompt, **kw: seen.update(prompt=prompt) or campagne.claude_cli.Reponse(REPONSE, 1.0))
     res = campagne.generate_contexte(c, "texte libre")
     assert res == {"fichier": "contexte.md", "remplis": 1, "total": 2}
     assert "[secret:Max]" in c.contexte_path.read_text(encoding="utf-8") and c.contexte_rempli()
     assert [j["personnage"] for j in c.joueurs()["joueurs"]] == ["Max", ""]
-    assert "silentgob" in seen["ins"] and seen["contents"] == "texte libre"
+    assert "silentgob" in seen["prompt"] and "<texte>\ntexte libre\n</texte>" in seen["prompt"]
 
 
 def test_contexte_deja_rempli_n_est_pas_ecrase(store, monkeypatch):
     c = store.create("Camp", "x", MJ, [MJ, P1])
     c.contexte_path.write_text("# Mon contexte à moi\n", encoding="utf-8")
     c.save_joueurs({**c.joueurs(), "joueurs": [{**c.joueurs()["joueurs"][0], "personnage": "Déjà"}]})
-    monkeypatch.setattr(campagne.gemini, "generate", lambda *a, **k: REPONSE)
+    monkeypatch.setattr(campagne.claude_cli, "ask", lambda *a, **k: campagne.claude_cli.Reponse(REPONSE, 1.0))
     res = campagne.generate_contexte(c, "x")
     assert res["fichier"] == "contexte_propose.md" and res["remplis"] == 0
     assert c.contexte_path.read_text(encoding="utf-8") == "# Mon contexte à moi\n"
@@ -185,5 +185,32 @@ def test_commande_joueur(store):
     member = types.SimpleNamespace(id=2, display_name="Silent", name="silentgob")
     run_cmd(make_bot(), inter, "joueur", membre=member, personnage="Max")
     assert "ajouté" in inter.out[-1] and c.joueurs()["joueurs"][0]["personnage"] == "Max"
-    run_cmd(make_bot(), inter, "joueur")
-    assert "paramètre `membre`" in inter.out[-1]
+
+
+def test_glossaire_afficher_ouvert_a_tous_corriger_reserve_et_campagne_au_choix(store):
+    a = store.create("Camp A", "x", MJ, [])
+    store.create("Camp B", "x", MJ, [])                                    # B est active
+    (a.path / "glossaire.md").write_text("# Glossaire appris\n\n## Noms et termes (forme correcte : variantes mal reconnues)\n"
+                                         "- Thrune : trune\n", encoding="utf-8")
+    cmd = make_bot().tree.commands["glossaire"]
+    inter = FakeInter(perm=False)
+    asyncio.run(cmd(inter, types.SimpleNamespace(value="afficher"), nom="Camp A"))
+    assert "Glossaire de Camp A" in inter.out[-1] and "Thrune" in inter.out[-1]
+    asyncio.run(cmd(inter, types.SimpleNamespace(value="corriger"), precision="x", nom="Camp A"))
+    assert "Gérer le serveur" in inter.out[-1]
+    asyncio.run(cmd(inter, types.SimpleNamespace(value="afficher"), nom="zzz"))
+    assert "introuvable" in inter.out[-1]
+
+
+def test_contexte_passe_par_claude(store, monkeypatch):
+    c = store.create("Camp", "x", MJ, [MJ, P1])
+    monkeypatch.setattr(campagne.claude_cli, "reason_unavailable", lambda: "programme introuvable")
+    inter = FakeInter()
+    run_cmd(make_bot(), inter, "contexte")
+    assert "Claude indisponible" in inter.out[-1]
+    monkeypatch.setattr(campagne.claude_cli, "reason_unavailable", lambda: None)
+    monkeypatch.setattr(campagne.claude_cli, "ask", lambda *a, **k: campagne.claude_cli.Reponse(REPONSE, 1.0))
+    c.brut_path.write_text("texte libre", encoding="utf-8")
+    inter = FakeInter()
+    run_cmd(make_bot(), inter, "contexte")
+    assert "contexte.md" in inter.out[-1] and c.contexte_rempli()

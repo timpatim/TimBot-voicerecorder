@@ -1,4 +1,4 @@
-"""Mémoire de campagne : nettoyage, cascade de résumés (Gemini simulé), pipeline, rollback, /record et /campagne resumer."""
+"""Mémoire de campagne : nettoyage du transcript, rollback d'une séance et « précédemment » au /record."""
 import asyncio
 import json
 import types
@@ -7,24 +7,7 @@ import pytest
 
 from voicebot import campagne, commands, memoire
 from voicebot.config import SET
-from voicebot.pipeline import PIPELINE_STEPS, StatusBoard, run_pipeline
 from tests.test_campagne import FakeInter, MJ, P1, make_bot
-
-
-class FakeGemini:
-    def __init__(self): self.calls = []
-
-    def __call__(self, instruction, contents, **kw):
-        self.calls.append(contents)
-        if "extraire les événements" in contents:
-            return "- [00:00:05] Max entre dans la ville ●"
-        if "écrire le compte rendu" in contents:
-            return "# Compte rendu\nMax est entré."
-        if "mettre à jour le résumé global" in contents:
-            return "# État\nMax est en ville."
-        if "Dans l'épisode précédent" in contents:
-            return "Dans l'épisode précédent de Camp… Max est en ville."
-        raise AssertionError(contents[:80])
 
 
 @pytest.fixture
@@ -36,11 +19,17 @@ def camp(tmp_path, monkeypatch, cfg_file):
     j = c.joueurs()
     j["joueurs"][0]["personnage"] = "Max le Rouge"
     c.save_joueurs(j)
-    fake = FakeGemini()
-    monkeypatch.setattr(memoire.gemini, "generate", fake)
-    monkeypatch.setitem(SET.values, "regles.cle_api", "k")
-    monkeypatch.setitem(SET.values, "campagnes.resume_auto", True)
-    return c, fake
+    return c, None
+
+
+def integrer(c, sid, precedemment="Dans l'épisode précédent de Camp… Max est en ville."):
+    """Une séance intégrée, écrite à la main (le résumé lui-même est testé dans test_analyse / test_claude)."""
+    seance = c.path / "seances" / sid
+    seance.mkdir(parents=True)
+    (seance / "compte_rendu.md").write_text("# Compte rendu\nMax est entré.\n", encoding="utf-8")
+    (seance / "precedemment.md").write_text(precedemment + "\n", encoding="utf-8")
+    version = campagne.add_version(c, "# État\nMax est en ville.", sid)
+    (seance / "meta.json").write_text(json.dumps({"version": version.name}), encoding="utf-8")
 
 
 ROWS = [
@@ -92,120 +81,26 @@ def test_parse_formats_de_transcript():
     assert memoire.parse_transcript_text(srt)[0]["text"] == "Salut"
 
 
-def test_cascade_complete_et_fichiers(camp):
-    c, fake = camp
-    steps = []
-    out = memoire.summarize_session(c, ROWS, "2026-10-30_200000", steps.append)
-    assert steps[0] == "extraction 1/2" and steps[-1] == "« précédemment »"
-    assert len(fake.calls) == 2 + 3                                       # 2 tranches + CR + état + précédemment
-    seance = c.path / "seances" / "2026-10-30_200000"
-    for name in ("transcript_nettoye.txt", "extractions.md", "compte_rendu.md", "precedemment.md", "meta.json"):
-        assert (seance / name).exists()
-    assert "30/10/2026" in fake.calls[2]                                  # date dans la consigne du compte rendu
-    assert "Max le Rouge (Silent)" in fake.calls[0]
-    assert out["version"] == "v001_2026-10-30-200000.md" and c.resume_global().read_text(encoding="utf-8").startswith("# État")
-    assert memoire.latest_precedemment(c).startswith("Dans l'épisode précédent")
-    with pytest.raises(campagne.CampaignError, match="déjà intégrée"):
-        memoire.summarize_session(c, ROWS, "2026-10-30_200000")
-
-
-def test_echec_gemini_ne_touche_pas_au_resume_global(camp, monkeypatch):
-    c, _ = camp
-    campagne.add_version(c, "# État initial", "journal")
-    def boom(instruction, contents, **kw):
-        if "écrire le compte rendu" in contents:
-            raise campagne.GeminiError("504")
-        return "ok"
-    monkeypatch.setattr(memoire.gemini, "generate", boom)
-    with pytest.raises(campagne.GeminiError):
-        memoire.summarize_session(c, ROWS, "s1")
-    assert c.resume_global().read_text(encoding="utf-8") == "# État initial\n" and len(campagne.versions(c)) == 1
-    assert not (c.path / "seances" / "s1" / "meta.json").exists()
-
-
 def test_rollback_retire_la_seance_et_son_precedemment(camp):
     c, _ = camp
     campagne.add_version(c, "# journal", "journal")
-    memoire.summarize_session(c, ROWS, "2026-10-30_200000")
+    integrer(c, "2026-10-30_200000")
     assert memoire.latest_precedemment(c) and c.nb_seances() == 1
     undone, now, gone = campagne.rollback(c)
     assert gone == "2026-10-30_200000" and now.startswith("v001")
     assert memoire.latest_precedemment(c) is None and c.nb_seances() == 0
     assert (c.path / "seances" / "_annulees" / "2026-10-30_200000" / "compte_rendu.md").exists()
-    memoire.summarize_session(c, ROWS, "2026-10-30_200000")               # on peut refaire la séance après rollback
+    integrer(c, "2026-10-30_200000")                                      # on peut refaire la séance après rollback
     assert len(campagne.versions(c)) == 2
 
 
-# --- pipeline -----------------------------------------------------------------------------------
-
-class Chan:
-    async def send(self, content, allowed_mentions=None):
-        self.msg = types.SimpleNamespace(versions=[content], edit=self._edit)
-        return self.msg
-
-    async def _edit(self, content, allowed_mentions=None): self.msg.versions.append(content)
-
-
-def run_memoire_step(rec):
-    from voicebot import pipeline
-    async def main():
-        board = StatusBoard(Chan(), asyncio.get_running_loop(), "t", PIPELINE_STEPS)
-        res = {"notes": []}
-        out = await asyncio.to_thread(pipeline._memoire_step, rec, res, board)
-        return out, res, board.state["memoire"]
-    return asyncio.run(main())
-
-
-def fake_rec(tmp_path, with_campaign):
-    d = tmp_path / "s" / "2026-10-30_200000"
-    d.mkdir(parents=True, exist_ok=True)
-    (d / "transcript_live.jsonl").write_text("\n".join(json.dumps(r) for r in ROWS), encoding="utf-8")
-    (d / "campagne.json").unlink(missing_ok=True)
-    if with_campaign:
-        (d / "campagne.json").write_text(json.dumps({"campagne": "camp"}), encoding="utf-8")
-    return types.SimpleNamespace(dir=d, session_id=d.name)
-
-
-def test_etape_pipeline(camp, tmp_path):
-    c, _ = camp
-    out, res, state = run_memoire_step(fake_rec(tmp_path, True))
-    assert state[0] == "ok" and out["titre"] == "Camp" and out["compte_rendu"].startswith("# Compte rendu")
-
-
-def test_etape_ignoree_sans_campagne_cle_ou_option(camp, tmp_path, monkeypatch):
-    assert run_memoire_step(fake_rec(tmp_path, False))[2] == ("skipped", "aucune campagne active")
-    monkeypatch.setitem(SET.values, "regles.cle_api", "")
-    assert run_memoire_step(fake_rec(tmp_path, True))[2] == ("skipped", "pas de clé Gemini")
-    monkeypatch.setitem(SET.values, "campagnes.resume_auto", False)
-    assert run_memoire_step(fake_rec(tmp_path, True))[2] == ("skipped", "à la demande : /campagne pack")
-
-
-def test_etape_echec_gemini_non_bloquante(camp, tmp_path, monkeypatch):
-    monkeypatch.setattr(memoire.gemini, "generate", lambda *a, **k: (_ for _ in ()).throw(campagne.GeminiError("quota")))
-    out, res, state = run_memoire_step(fake_rec(tmp_path, True))
-    assert out is None and state[0] == "failed" and "/campagne pack" in res["notes"][0]
-
-
-# --- commandes ---------------------------------------------------------------------------------
-
 class Att:
+    """Pièce jointe Discord factice."""
     def __init__(self, text): self._b, self.size = text.encode(), len(text.encode())
     async def read(self): return self._b
 
 
-def test_commande_resumer_avec_transcript_joint(camp, monkeypatch):
-    c, _ = camp
-    monkeypatch.setitem(SET.values, "campagnes.moteur_resume", "gemini")          # ancienne méthode, toujours disponible
-    bot, inter = make_bot(), FakeInter()
-    inter.channel_id = 1
-    cmd = bot.tree.commands["campagne"]
-    asyncio.run(cmd(inter, types.SimpleNamespace(value="resumer"), session="2026-10-24_190000",
-                    fichier=Att("[00:00:01.000 → 00:00:04.000] couette : Vous entrez dans la salle.")))
-    assert any("intégrée" in str(o) for o in inter.out) and c.nb_seances() == 1
-    assert len(campagne.versions(c)) == 1
-
-
 def test_record_affiche_le_precedemment(camp):
     c, _ = camp
-    memoire.summarize_session(c, ROWS, "2026-10-30_200000")
+    integrer(c, "2026-10-30_200000")
     assert memoire.latest_precedemment(c) == "Dans l'épisode précédent de Camp… Max est en ville."

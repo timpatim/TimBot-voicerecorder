@@ -1,4 +1,4 @@
-"""Voix du bot : nettoyage du texte, cache de l'audio, découpage, installation et commandes (Chatterbox simulé)."""
+"""Voix du bot : nettoyage du texte, cache de l'audio, découpage, installation et commandes (OmniVoice simulé)."""
 import asyncio
 import tempfile
 import json
@@ -15,9 +15,7 @@ from tests.test_campagne import FakeInter, MJ, P1, make_bot
 from tests.test_pack import REPONSE, ROWS, SID, camp  # noqa: F401  (fixture camp)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
-import tts_chatterbox  # noqa: E402
 import tts_omnivoice  # noqa: E402
-import fix_voix_torch  # noqa: E402
 
 
 def integrated(camp):
@@ -26,7 +24,7 @@ def integrated(camp):
 
 
 class FakeRun:
-    """Remplace le lancement du processus Chatterbox : écrit un WAV bidon, ou échoue."""
+    """Remplace le lancement du processus de synthèse : écrit un WAV bidon, ou échoue."""
     def __init__(self, code=0, stderr=b"", wav_bytes=b"RIFFfake", stdout=b""):
         self.code, self.stderr, self.cmds, self.wav_bytes, self.stdout = code, stderr, [], wav_bytes, stdout
 
@@ -48,9 +46,9 @@ def test_nettoyage_du_texte_pour_la_voix():
 
 def test_decoupage_en_morceaux_courts():
     text = "Première phrase. Deuxième phrase plus longue, avec une virgule, et encore des mots pour dépasser. " * 4 + "\n\nAutre paragraphe."
-    chunks = tts_chatterbox.split_text(text, 80)
+    chunks = tts_omnivoice.split_text(text, 80)
     assert all(len(c) <= 80 for c in chunks) and chunks[-1] == "Autre paragraphe." and len(chunks) > 4
-    assert tts_chatterbox.split_text("  \n ") == []
+    assert tts_omnivoice.split_text("  \n ") == []
 
 
 def test_audio_genere_puis_reutilise_depuis_le_cache(camp, monkeypatch):
@@ -106,20 +104,8 @@ def test_python_de_la_voix(monkeypatch, tmp_path):
     assert voix.python_exe() == sys.executable
     (tmp_path / ".voix_python_omnivoice").write_text("C:\\envs\\voix\\python.exe\n", encoding="utf-8")
     assert voix.python_exe() == "C:\\envs\\voix\\python.exe"
-    monkeypatch.setitem(SET.values, "voix.moteur", "chatterbox")             # chaque moteur a son environnement
-    assert voix.python_exe() == sys.executable
-    (tmp_path / ".voix_python").write_text("C:\\envs\\chatter\\python.exe\n", encoding="utf-8")
-    assert voix.python_exe() == "C:\\envs\\chatter\\python.exe"
     monkeypatch.setitem(SET.values, "voix.python", "D:\\autre\\python.exe")
     assert voix.python_exe() == "D:\\autre\\python.exe"
-
-
-def test_torch_cuda_de_la_meme_version():
-    assert fix_voix_torch.target_variant("2.6.0+cpu", "cu128") == "cu126"      # cu128 n'existe pas pour torch 2.6
-    assert fix_voix_torch.target_variant("2.8.0+cpu", "cu128") == "cu128"
-    cmd = fix_voix_torch.build_command("2.6.0+cpu", "cu126")
-    assert "torch==2.6.0" in cmd and "torchaudio==2.6.0" in cmd and "--no-deps" in cmd
-    assert cmd[cmd.index("--index-url") + 1].endswith("/cu126")
 
 
 def test_cached_audio_ne_synthetise_jamais_et_detecte_un_texte_modifie(camp, monkeypatch):
@@ -261,25 +247,23 @@ def test_recap_au_demarrage_lit_seulement_un_audio_pret(camp, voix_on, monkeypat
     assert len(vc.played) == 1 and len(sent) == 1
 
 
-def test_integrer_prepare_l_audio_automatiquement_sauf_pendant_un_enregistrement(camp, voix_on, monkeypatch, tmp_path):
+def test_une_seance_integree_prepare_l_audio_automatiquement_sauf_pendant_un_enregistrement(camp, voix_on, monkeypatch, tmp_path):
     monkeypatch.setattr(voix, "_run", voix_on)
-    pack.build_packs(camp, ROWS[:3], SID)
-    from tests.test_memoire import Att
 
-    async def go(bot, inter):
-        await bot.tree.commands["campagne"](inter, types.SimpleNamespace(value="integrer"), fichier=Att(REPONSE))
+    async def go(bot, inter, sid):
+        pack.build_packs(camp, ROWS[:3], sid)
+        out = pack.integrate(camp, REPONSE, sid)                                # ce que fait /campagne resumer à la fin
+        await commands.announce_integration(bot, bot.engine, inter, camp, out, "✅ Séance intégrée.", inter.followup.send)
         await asyncio.gather(*list(commands._tasks))                            # attend la préparation en arrière-plan
     bot, inter = make_bot(), FakeInter()
-    asyncio.run(go(bot, inter))
+    asyncio.run(go(bot, inter, SID))
     assert any("en préparation" in str(o) for o in inter.out) and len(voix_on.cmds) == 1
     assert voix.cached_audio(camp, SID, memoire.seance_text(camp, "precedemment.md")[1]) is not None
     # avec un enregistrement en cours ailleurs : pas de synthèse
-    camp2_dir = SID + "b"
-    pack.build_packs(camp, ROWS[:3], camp2_dir)
     bot2, inter2 = make_bot(), FakeInter()
     bot2.sessions[99] = (object(), object(), FakeVC())
     inter2.guild_id = 8
-    asyncio.run(go(bot2, inter2))
+    asyncio.run(go(bot2, inter2, SID + "b"))
     assert any("non préparé" in str(o) for o in inter2.out) and len(voix_on.cmds) == 1
 
 
@@ -314,24 +298,6 @@ def test_moteur_whisper_liberation_et_rechargement(monkeypatch):
     engine.start_loading()
     engine._done.wait(5)
     assert loads == [1] and engine.state == "loading"                           # (l'état « prêt » est posé par _load réel)
-
-
-def test_message_clair_quand_le_filigrane_perth_est_indisponible(camp, monkeypatch):
-    out = integrated(camp)
-    err = b"Traceback...\n  self.watermarker = perth.PerthImplicitWatermarker()\nTypeError: 'NoneType' object is not callable"
-    monkeypatch.setattr(voix, "_run", FakeRun(1, err))
-    with pytest.raises(voix.VoixError, match=r'setuptools<81'):
-        voix.ensure_audio(camp, SID, out["precedemment"])
-
-
-def test_le_worker_diagnostique_perth(monkeypatch, capsys):
-    fake = types.ModuleType("perth")
-    fake.PerthImplicitWatermarker = None
-    monkeypatch.setitem(sys.modules, "perth", fake)
-    monkeypatch.setitem(sys.modules, "perth.perth_net", None)                   # force ImportError sur l'import
-    with pytest.raises(SystemExit) as e:
-        tts_chatterbox.check_perth()
-    assert e.value.code == 3 and "setuptools<81" in capsys.readouterr().err
 
 
 def test_vitesse_et_pause_changent_la_cle_du_cache(camp, cfg_file):
@@ -388,20 +354,8 @@ def test_audio_force_regenere_meme_si_pret(camp, voix_on, monkeypatch, engine_ca
     run_action(voice_inter(FakeVC()), "audio")
     run_action(voice_inter(FakeVC()), "audio")                                  # prêt : rien de nouveau
     assert len(voix_on.cmds) == 1
-    run_action(voice_inter(FakeVC()), "audio force")
+    run_action(voice_inter(FakeVC()), "audio", forcer=True)
     assert len(voix_on.cmds) == 2
-
-
-def test_moteur_chatterbox_garde_son_worker_son_installeur_et_ses_messages(camp, monkeypatch):
-    out = integrated(camp)
-    monkeypatch.setitem(SET.values, "voix.moteur", "chatterbox")
-    run = FakeRun()
-    monkeypatch.setattr(voix, "_run", run)
-    voix.ensure_audio(camp, SID, out["precedemment"])
-    assert run.cmds[-1][1].endswith("tts_chatterbox.py") and "--temperature" in run.cmds[-1] and "--speed" not in run.cmds[-1]
-    monkeypatch.setattr(voix, "_run", FakeRun(1, b"No module named 'chatterbox'"))
-    with pytest.raises(voix.VoixError, match="install_voix.bat"):
-        voix.ensure_audio(camp, SID, out["precedemment"], force=True)
 
 
 def test_omnivoice_par_defaut_vitesse_native_et_texte_de_reference(camp, monkeypatch):
@@ -430,7 +384,7 @@ def test_changer_de_moteur_ou_de_texte_de_reference_invalide_l_audio(camp, monke
     assert voix.cached_audio(camp, SID, out["precedemment"]) is None
     voix.ensure_audio(camp, SID, out["precedemment"])
     assert voix.cached_audio(camp, SID, out["precedemment"]) is not None
-    monkeypatch.setitem(SET.values, "voix.moteur", "chatterbox")
+    (camp.path / "voix.wav").write_bytes(b"x")                                 # une autre voix de référence : audio à refaire
     assert voix.cached_audio(camp, SID, out["precedemment"]) is None
 
 
@@ -626,10 +580,10 @@ def test_dicter_lit_un_audio_aux_reglages_changes_et_explique_l_absence(camp, vo
     assert "non prêt pour la séance 2999-01-01" in msg and SID in msg
 
 
-# --- /dire ---------------------------------------------------------------------------------------------------
+# --- /dicter -------------------------------------------------------------------------------------------------
 
 def run_dire(inter, texte, bot=None):
-    asyncio.run((bot or make_bot()).tree.commands["dire"](inter, texte))
+    asyncio.run((bot or make_bot()).tree.commands["dicter"](inter, texte))
 
 
 @pytest.fixture(autouse=True)
@@ -863,8 +817,7 @@ def test_precharge_au_demarrage_seulement_si_la_voix_est_active_et_whisper_conse
 
 def test_le_mode_permanent_n_est_utilise_qu_avec_omnivoice_et_whisper_conserve(monkeypatch):
     monkeypatch.undo()
-    for engine_name, free, expected in [("omnivoice", False, True), ("omnivoice", True, False), ("chatterbox", False, False)]:
-        monkeypatch.setitem(SET.values, "voix.moteur", engine_name)
+    for free, expected in [(False, True), (True, False)]:
         monkeypatch.setitem(SET.values, "voix.liberer_whisper", free)
         assert voix.use_server() is expected
 
@@ -982,11 +935,11 @@ def test_audio_avec_une_autre_voix_utilise_son_echantillon(camp, voix_on, voix_d
 def test_dire_avec_voix_et_voix_inconnue(camp, voix_on, voix_dir, monkeypatch):
     monkeypatch.setattr(voix, "_run", voix_on)
     inter = voice_inter(FakeVC())
-    asyncio.run(make_bot().tree.commands["dire"](inter, "Salut", "Sorciere"))
+    asyncio.run(make_bot().tree.commands["dicter"](inter, "Salut", "Sorciere"))
     cmd = voix_on.cmds[-1]
     assert cmd[cmd.index("--voice") + 1].endswith("voix.Sorciere.wav")
     inter = voice_inter(FakeVC())
-    asyncio.run(make_bot().tree.commands["dire"](inter, "Salut", "inconnue"))
+    asyncio.run(make_bot().tree.commands["dicter"](inter, "Salut", "inconnue"))
     assert "❌" in inter.out[-1] and "Disponibles" in inter.out[-1] and len(voix_on.cmds) == 1
 
 
@@ -1099,3 +1052,21 @@ def test_audio_temporaire_supprime_meme_en_cas_d_echec_et_purge_au_demarrage(cam
     assert voix.purge_temp() == 1 and not stale.exists() and other.exists()
     voix.discard_free(other / "x.wav")                                                # fichier étranger : jamais supprimé
     assert other.exists()
+
+
+def test_audio_de_dire_joignable_au_message(tmp_path, monkeypatch):
+    monkeypatch.setattr(voix.shutil, "which", lambda _n: None)                     # sans ffmpeg : le WAV, s'il est assez léger
+    wav = tmp_path / "dire.wav"
+    wav.write_bytes(b"x" * 1000)
+    assert voix.shareable_audio(wav) == wav
+    assert voix.shareable_audio(wav, max_bytes=500) is None                        # trop lourd pour Discord
+
+
+def test_audio_conserve_joint_sans_etre_supprime(tmp_path, monkeypatch):
+    monkeypatch.setattr(voix.shutil, "which", lambda _n: None)
+    wav = tmp_path / "precedemment.wav"
+    wav.write_bytes(b"x" * 100)
+    share = voix.shareable_audio(wav, copie=True)
+    assert share == wav
+    voix.discard_free(share)                                                         # ne touche jamais au WAV conservé
+    assert wav.exists()

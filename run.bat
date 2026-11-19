@@ -17,7 +17,7 @@ if errorlevel 1 (
 )
 
 set PYTHONUTF8=1
-python bot_v4.py %*
+python bot_v7.py %*
 set "RC=%errorlevel%"
 
 if not "%RC%"=="0" (

@@ -1,4 +1,4 @@
-"""Dossier des modèles téléchargés (Whisper, alignement, OmniVoice, Chatterbox...).
+"""Dossier des modèles téléchargés (Whisper, alignement, OmniVoice...).
 
 Par défaut, Hugging Face et PyTorch rangent leurs modèles dans le profil de l'utilisateur (~/.cache). Ici ils vont dans
 un dossier du programme (réglage `modeles.dossier`, relatif au dossier du programme), pour tout garder au même endroit

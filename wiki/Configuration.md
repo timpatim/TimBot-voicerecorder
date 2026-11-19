@@ -16,7 +16,7 @@ automatiquement ; une valeur invalide retombe sur le défaut avec un avertisseme
 ## Sections
 
 - [`[discord]`](#discord) : Discord
-- [`[modeles]`](#modeles) : Modèles téléchargés (Whisper, OmniVoice, Chatterbox...)
+- [`[modeles]`](#modeles) : Modèles téléchargés (Whisper, OmniVoice...)
 - [`[sessions]`](#sessions) : Enregistrements
 - [`[audio]`](#audio) : Archivage audio
 - [`[vad]`](#vad) : Détection de voix (VAD) et découpage en énoncés
@@ -27,10 +27,10 @@ automatiquement ; une valeur invalide retombe sur le défaut avec un avertisseme
 - [`[fin_de_session]`](#fin_de_session) : Traitement de fin de session (modifiable avec /config pour les étapes)
 - [`[mp3]`](#mp3) : Conversion MP3
 - [`[drive]`](#drive) : Google Drive
-- [`[regles]`](#regles) : Google Gemini : questions de règles (/regle) et génération du contexte de campagne (/campagne)
+- [`[regles]`](#regles) : Google Gemini : questions de règles (/regle)
 - [`[campagnes]`](#campagnes) : Campagnes de jeu de rôle (commande /campagne)
 - [`[claude]`](#claude) : Claude (ton abonnement, via le programme `claude`) : résumés de campagne avec /campagne resumer
-- [`[voix]`](#voix) : Voix du bot (OmniVoice ou Chatterbox) : « Dans l'épisode précédent… » dicté dans le canal vocal
+- [`[voix]`](#voix) : Voix du bot (OmniVoice) : « Dans l'épisode précédent… » dicté dans le canal vocal
 
 ## discord
 
@@ -40,12 +40,12 @@ automatiquement ; une valeur invalide retombe sur le défaut avec un avertisseme
 |---|---|---|---|---|
 | `token` | texte | *(vide)* |  | Jeton du bot. Mieux vaut le laisser vide et définir la variable d'environnement DISCORD_TOKEN. (variable d'environnement : `DISCORD_TOKEN`) |
 | `guild_id` | texte | *(vide)* |  | Identifiant de ton serveur : les commandes apparaissent instantanément (vide = commandes globales, plus lentes). (variable d'environnement : `DISCORD_GUILD_ID`) |
-| `canal_messages` | texte | *(vide)* | l'identifiant numérique du salon (ou vide) | Identifiant du salon texte des messages SYSTÈME et informatifs : suivi du traitement de fin de session, alertes, une ligne de trace à chaque commande lancée par un joueur, compte rendu et fichiers de /campagne resumer, integrer et pack sortie:fichier. Les réponses aux demandes (/regle, /transcript, /stats, /campagne afficher...) restent dans le salon où la commande est tapée. Vide = tout dans le salon de la commande (pas de trace). Pour l'obtenir : Paramètres Discord > Avancés > Mode développeur, puis clic droit sur le salon > Copier l'identifiant du salon. Le bot doit pouvoir y voir le salon, écrire et intégrer des liens. |
+| `canal_messages` | texte | *(vide)* | l'identifiant numérique du salon (ou vide) | Identifiant du salon texte des messages SYSTÈME et informatifs : suivi du traitement de fin de session, alertes, une ligne de trace à chaque commande lancée par un joueur, compte rendu de /campagne resumer et condenser. Les réponses aux demandes (/regle, /transcript, /stats, /campagne afficher...) restent dans le salon où la commande est tapée. Vide = tout dans le salon de la commande (pas de trace). Pour l'obtenir : Paramètres Discord > Avancés > Mode développeur, puis clic droit sur le salon > Copier l'identifiant du salon. Le bot doit pouvoir y voir le salon, écrire et intégrer des liens. |
 | `message_consentement` | texte | `🔴 **Enregistrement en cours** dans {canal}. L'audio de chaque participant et sa transcription sont conservés. Quitte le canal si tu ne souhaites pas être enregistré. `/stop` pour terminer.` |  | Message affiché au /record. {canal} est remplacé par le canal vocal. |
 
 ## modeles
 
-*Modèles téléchargés (Whisper, OmniVoice, Chatterbox...)*
+*Modèles téléchargés (Whisper, OmniVoice...)*
 
 | Clé | Type | Défaut | Valeurs admises | Rôle |
 |---|---|---|---|---|
@@ -181,7 +181,7 @@ automatiquement ; une valeur invalide retombe sur le défaut avec un avertisseme
 
 ## regles
 
-*Google Gemini : questions de règles (/regle) et génération du contexte de campagne (/campagne)*
+*Google Gemini : questions de règles (/regle)*
 
 | Clé | Type | Défaut | Valeurs admises | Rôle |
 |---|---|---|---|---|
@@ -208,13 +208,7 @@ automatiquement ; une valeur invalide retombe sur le défaut avec un avertisseme
 | `dossier` | texte | `campagnes` | ne peut pas être vide | Dossier où sont rangées les campagnes (un sous-dossier par campagne : contexte, joueurs, résumés). |
 | `taille_max_brut_ko` | entier | `200` | un entier de 1 à 2000 | Taille maximale (Ko) du texte de contexte qu'on peut envoyer à /campagne contexte. |
 | `taille_max_transcript_ko` | entier | `5000` | un entier de 1 à 20000 | Taille maximale (Ko) d'un transcript joint à /campagne resumer. |
-| `resume_auto` | oui / non | `non` |  | À la fin d'une session, génère automatiquement le compte rendu, le résumé global et le « précédemment » (Gemini). |
-| `presse_papiers` | oui / non | `oui` |  | /campagne pack copie le pack dans le presse-papiers et /campagne integrer lit la réponse dans le presse-papiers (sans fichier). Il s'agit du presse-papiers de la machine qui fait tourner le bot : à mettre sur non si le bot tourne sur un autre ordinateur que ton client Discord (utilise alors les fichiers). |
-| `moteur_resume` | texte | `claude` | claude ou gemini | Moteur de /campagne resumer : claude (programme `claude` de ton abonnement, voir [claude]) ou gemini (ancienne méthode, plusieurs appels, clé Gemini requise). |
-| `pack_fusion_s` | nombre | `10.0` | un nombre de 0 à 60 | Pack allégé : fusionne les répliques consécutives d'un même locuteur séparées de moins de N secondes (moins de texte à envoyer, donc moins d'usage de l'abonnement ; 0 = aucune fusion). Seule la première réplique d'un bloc garde son horodatage. |
-| `pack_minutes` | entier | `0` | 0 (pas de découpe) ou un entier de 15 à 240 | Découpe des packs : durée (minutes) d'une partie, 0 = un seul pack par séance. À activer (ex. 60) si le chat utilisé ne lit pas les longs fichiers jusqu'au bout. |
-| `tranche_minutes` | entier | `30` | un entier de 5 à 120 | Durée (minutes) des tranches de transcript analysées une à une. |
-| `delai_attente_s` | entier | `300` | un entier >= 30 | Temps maximal d'attente (s) d'une réponse de Gemini pour la mémoire de campagne. |
+| `pack_fusion_s` | nombre | `10.0` | un nombre de 0 à 60 | Transcript envoyé à Claude : fusionne les répliques consécutives d'un même locuteur séparées de moins de N secondes (moins de texte à envoyer, donc moins d'usage de l'abonnement ; 0 = aucune fusion). Seule la première réplique d'un bloc garde son horodatage. |
 
 ## claude
 
@@ -227,26 +221,28 @@ automatiquement ; une valeur invalide retombe sur le défaut avec un avertisseme
 | `effort` | texte | `medium` | low, medium, high, xhigh ou max | Effort de réflexion : medium (recommandé : plus fiable, ~2 min par séance), low (plus rapide, moins fiable : il a raccourci le résumé lors des essais), high, xhigh ou max (plus lent et plus d'usage de l'abonnement). |
 | `delai_s` | entier | `900` | un entier >= 60 | Temps maximal d'attente (s) d'une réponse de Claude. |
 | `options` | texte | `--safe-mode` |  | Options supplémentaires de la ligne de commande (ignore CLAUDE.md, hooks, plugins et réglages perso de ton Claude Code). Si ta version de Claude Code ne connaît pas --safe-mode (erreur « unknown option »), vide ce réglage ou mets à jour : `claude update`. |
+| `nettoyage` | oui / non | `oui` |  | Premier appel à Claude : il corrige les noms et termes mal reconnus du transcript (liste de corrections validée et appliquée par le programme ; l'original reste intact). |
+| `questions` | oui / non | `oui` |  | Claude pose aux joueurs (permission Gérer le serveur) ses questions sur les ambiguïtés du scénario ; leurs réponses servent à une version finale. Sans question : 2 appels (nettoyage + analyse), ni nettoyage ni question : 1 appel. |
+| `questions_max` | entier | `6` | un entier entre 1 et 10 | Nombre maximal de questions posées aux joueurs. |
+| `questions_delai_min` | entier | `30` | un entier >= 1 | Attente maximale (minutes) des réponses ; passé ce délai, les questions sans réponse restent « non précisé ». |
 
 ## voix
 
-*Voix du bot (OmniVoice ou Chatterbox) : « Dans l'épisode précédent… » dicté dans le canal vocal*
+*Voix du bot (OmniVoice) : « Dans l'épisode précédent… » dicté dans le canal vocal*
 
 | Clé | Type | Défaut | Valeurs admises | Rôle |
 |---|---|---|---|---|
-| `activer` | oui / non | `non` |  | Active la voix du bot (nécessite install_voix.bat). Désactivée : aucune synthèse vocale, aucune lecture. |
-| `liberer_whisper` | oui / non | `non` |  | oui : Whisper est retiré de la mémoire (GPU) pendant une synthèse vocale puis rechargé, pour ne jamais avoir les deux modèles en même temps ; la synthèse, /dire et /campagne audio sont alors refusés pendant un enregistrement. non : Whisper reste chargé, la transcription continue et la voix fonctionne aussi pendant un enregistrement, mais il faut assez de mémoire GPU pour les deux (voir la ligne de mémoire GPU dans la console). |
+| `activer` | oui / non | `non` |  | Active la voix du bot (nécessite install_omnivoice.bat). Désactivée : aucune synthèse vocale, aucune lecture. |
+| `liberer_whisper` | oui / non | `non` |  | oui : Whisper est retiré de la mémoire (GPU) pendant une synthèse vocale puis rechargé, pour ne jamais avoir les deux modèles en même temps ; la synthèse, /dicter et /campagne audio sont alors refusés pendant un enregistrement. non : Whisper reste chargé, la transcription continue et la voix fonctionne aussi pendant un enregistrement, mais il faut assez de mémoire GPU pour les deux (voir la ligne de mémoire GPU dans la console). |
 | `au_demarrage` | oui / non | `oui` |  | Au /record, le bot dicte dans le canal vocal le « précédemment » de la dernière séance (audio préparé à l'avance). |
-| `moteur` | texte | `omnivoice` | omnivoice ou chatterbox | Moteur de synthèse : omnivoice (install_omnivoice.bat) ou chatterbox (install_voix.bat). Changer de moteur invalide les audios déjà préparés. |
-| `python` | texte | *(vide)* |  | Python de l'environnement de la voix (vide = celui écrit par l'installeur du moteur choisi, sinon celui du bot). |
+| `python` | texte | *(vide)* |  | Python de l'environnement de la voix (vide = celui écrit par install_omnivoice.bat, sinon celui du bot). |
 | `langue` | texte | `fr` | ne peut pas être vide | Langue lue (code à deux lettres : fr, en, es...). |
-| `dossier` | texte | `voix` |  | Dossier commun des voix du bot : un échantillon audio (~10 s) par voix, nommé voix.<nom>.wav (ou .mp3, .flac). Avec OmniVoice, voix.<nom>.txt donne la transcription de l'échantillon ; sans lui, OmniVoice la devine avec Whisper. La voix d'une campagne se choisit avec /voix, une voix ponctuelle avec le paramètre nom_voix de /dire et /campagne audio. À n'utiliser qu'avec l'accord de la personne dont c'est la voix. |
-| `voix_reference` | texte | *(vide)* |  | Ancien réglage, toujours pris en compte : échantillon par défaut quand la campagne n'a pas de voix choisie (/voix). Une campagne peut aussi avoir un voix.wav dans son dossier (ancien système). Vide = voix par défaut du moteur. |
+| `dossier` | texte | `voix` |  | Dossier commun des voix du bot : un échantillon audio (~10 s) par voix, nommé voix.<nom>.wav (ou .mp3, .flac). Avec OmniVoice, voix.<nom>.txt donne la transcription de l'échantillon ; sans lui, OmniVoice la devine avec Whisper. La voix d'une campagne se choisit avec /campagne voix, une voix ponctuelle avec le paramètre nom_voix de /dicter et /campagne audio. À n'utiliser qu'avec l'accord de la personne dont c'est la voix. |
+| `voix_reference` | texte | *(vide)* |  | Ancien réglage, toujours pris en compte : échantillon par défaut quand la campagne n'a pas de voix choisie (/campagne voix). Une campagne peut aussi avoir un voix.wav dans son dossier (ancien système). Vide = voix par défaut du moteur. |
 | `device` | texte | *(vide)* | cuda, cpu ou vide | cuda ou cpu (vide = automatique). |
 | `vitesse` | nombre | `1.0` | un nombre de 0.5 à 2.0 | Vitesse de lecture (1.0 = normale, 1.15 = un peu plus rapide). Appliquée sans changer la hauteur de la voix. Entre 0.5 et 2.0. |
 | `pause_s` | nombre | `0.25` | un nombre de 0 à 3 | Silence (s) entre deux morceaux de texte (avant accélération). |
-| `etapes` | entier | `32` | un entier de 4 à 128 | OmniVoice : nombre d'étapes de génération (32 = qualité recommandée, 16 = plus rapide). Sans effet avec Chatterbox. |
-| `temperature` | nombre | `0.6` | un nombre de 0.1 à 1.5 | Chatterbox uniquement. Variabilité de la synthèse (0.8 = défaut de Chatterbox). 0.6 limite les mots farfelus et les bruits ; trop bas, la voix devient monotone. Si un audio est raté, relance avec /campagne audio force. |
+| `etapes` | entier | `32` | un entier de 4 à 128 | OmniVoice : nombre d'étapes de génération (32 = qualité recommandée, 16 = plus rapide). |
 | `mots` | entier | `110` | un entier de 30 à 400 | Longueur visée (en mots) du « précédemment » demandé à l'IA dans les prompts. ~110 mots = environ 40 s à voix haute. Ne change pas un texte déjà écrit. |
-| `dire_max` | entier | `600` | un entier de 20 à 3000 | Longueur maximale (caractères) d'un texte dit avec /dire (environ 40 s de voix pour 600 caractères). |
+| `dire_max` | entier | `600` | un entier de 20 à 3000 | Longueur maximale (caractères) d'un texte dit avec /dicter (environ 40 s de voix pour 600 caractères). |
 | `delai_s` | entier | `900` | un entier >= 30 | Temps maximal (s) d'une synthèse vocale. |

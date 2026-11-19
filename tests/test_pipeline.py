@@ -151,7 +151,7 @@ def test_etapes_desactivees_dans_config_ini(cfg_file, session, drive):
         text = text.replace(old, new, 1)
     cfg_file.write_text(text, encoding="utf-8")
     res, board = process(session, load_config(), drive)
-    assert board.count("⏭️") == 3 and "Google Drive — 1 fichier(s)" in board
+    assert board.count("⏭️") == 2 and "Google Drive — 1 fichier(s)" in board
     assert [b["name"] for b in drive.fake.uploaded] == ["transcript_nettoye.txt"]
     assert drive.fake.permissions == [] and res["shared"] is False
 

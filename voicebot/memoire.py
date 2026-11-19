@@ -1,16 +1,14 @@
-"""Mémoire de campagne : de la transcription d'une séance au compte rendu, au résumé global et au « précédemment ».
+"""Mémoire de campagne : briques communes (règles des prompts, transcript nettoyé, contexte, séances et « précédemment »).
 
-Module indépendant de Discord. Méthode en cascade : nettoyage du transcript, découpe en tranches, extraction des faits
-par tranche, compte rendu, mise à jour du résumé global (nouvelle version), « Dans l'épisode précédent… ».
-Tout est calculé avant d'écrire la nouvelle version : en cas d'échec de Gemini, le résumé global n'est pas modifié.
+Module indépendant de Discord. Le résumé lui-même est fait par `analyse.py` / `pack.py` avec le programme `claude`.
 """
 import json
 import re
 from datetime import datetime
 from pathlib import Path
 
-from . import gemini
-from .campagne import Campaign, CampaignError, add_version, versions
+from . import glossaire
+from .campagne import Campaign, CampaignError, versions
 from .config import SET
 
 RE_TS = r"(\d+):(\d\d):(\d\d)[.,](\d{3})"
@@ -29,51 +27,11 @@ Règles absolues :
 6. SPOILERS. N'utilise pas ta connaissance du scénario publié pour compléter les faits. Ne cite aucun événement, identité ou secret que les personnages n'ont pas découvert à la table. Ta connaissance du jeu ne sert qu'à reconnaître les noms et la terminologie.
 7. LANGUE : français. Style sobre, sans formule de politesse ni méta-commentaire."""
 
-PROMPT_EXTRACTION = """{regles_communes}
-
-TÂCHE : extraire les événements de jeu d'une tranche de transcription (environ 30 minutes).
-
-Sources fournies :
-<contexte>{contexte}</contexte>
-<etat_campagne>{etat}</etat_campagne>
-<tranche numero="{n}" debut="{debut}" fin="{fin}">{texte}</tranche>
-
-Produis une liste à puces chronologique. Chaque puce : l'horodatage [hh:mm:ss] du début du fait, ce qui se passe (qui fait quoi, résultat), et un indice de confiance ● sûr / ◐ probable / ○ incertain. Marque [secret:X] les faits secrets. Regroupe les combats en quelques puces (déroulé, issue, pertes importantes) sans détailler chaque jet de dés. Termine par une liste « Noms douteux » et une liste « Fils ouverts » (questions posées, indices, décisions annoncées). Aucun résumé du hors-jeu."""
-
-PROMPT_COMPTE_RENDU = """{regles_communes}
-
-TÂCHE : écrire le compte rendu de la séance du {date}, destiné à TOUS les joueurs.
-
-<contexte>{contexte}</contexte>
-<etat_campagne>{etat}</etat_campagne>
-<extractions>{extractions_des_tranches}</extractions>
-
-Structure : titre avec la date ({date}) ; résumé en une phrase ; rappel de départ (reprendre le récap du MJ s'il existe) ; déroulé par grandes scènes (un court paragraphe chacune) ; « Où on en est » ; « Points ouverts » ; « Réserves » (noms à confirmer, parties peu fiables). 350 à 500 mots. Écarte tous les faits [secret:X] et [mj]. Utilise les noms des personnages, pas ceux des joueurs."""
-
-PROMPT_ETAT = """{regles_communes}
-
-TÂCHE : mettre à jour le résumé global de la campagne avec la séance qui vient d'avoir lieu.
-
-<etat_campagne_actuel>{etat}</etat_campagne_actuel>
-<compte_rendu_seance>{compte_rendu}</compte_rendu_seance>
-<extractions>{extractions_des_tranches}</extractions>
-
-Réécris le document COMPLET, au même format que l'actuel, en : intégrant les faits nouveaux dans la chronologie, mettant à jour alliés / adversaires / fils ouverts (supprime les fils résolus, ajoute les nouveaux), conservant tout ce qui n'a pas changé. Si la séance recoupe des faits déjà présents, fusionne sans doublon. Si elle contredit l'état actuel, ne tranche pas : ajoute la contradiction dans « Réserves ». Commence le document par une note « Changements depuis la version précédente ». Même règles de secret : le document est lu par tous les joueurs."""
-
 def longueur_precedemment() -> str:
     """Consigne de longueur du « précédemment », d'après `voix.mots` (il est lu à voix haute : court, c'est mieux)."""
     n = int(SET["voix.mots"])
     return f"environ {n} mots (jamais plus de {round(n * 1.2)})"
 
-
-PROMPT_PRECEDEMMENT = """{regles_communes}
-
-TÂCHE : écrire le « Dans l'épisode précédent… » qui sera affiché au début de la prochaine séance.
-
-<etat_campagne>{etat}</etat_campagne>
-<compte_rendu_seance>{compte_rendu}</compte_rendu_seance>
-
-Ton : récap de série télé, vivant et un peu moqueur, sans trahir les faits. {mots}, 2 à 3 paragraphes courts, puis une phrase d'accroche qui rappelle les enjeux immédiats (situation en cours, menace, choix à faire). Commence par « Dans l'épisode précédent de {nom_campagne}… ». Respecte les secrets et ne devine rien au-delà du compte rendu."""
 
 ETAT_VIDE = "(aucun résumé : début de campagne, rien n'est encore établi)"
 
@@ -179,7 +137,7 @@ def windows(rows: list, minutes: int) -> list:
 
 
 def write_clean_transcript(rows: list, path: Path, title: str, campaign: Campaign | None = None) -> int:
-    """Écrit le transcript nettoyé (interjections retirées, phrases fusionnées) ; sans appel à Gemini.
+    """Écrit le transcript nettoyé (interjections retirées, phrases fusionnées) ; sans appel à un modèle.
     Avec une campagne, les locuteurs deviennent « MJ » / « Personnage (joueur) ». -> nombre de lignes."""
     label_of = labeler(campaign.joueurs()) if campaign else (lambda r: str(r.get("name", "?")).strip())
     cleaned = clean_rows(rows, label_of)
@@ -202,16 +160,16 @@ def etat_text(campaign: Campaign) -> str:
     return p.read_text(encoding="utf-8").strip() if p else ETAT_VIDE
 
 
-def contexte_text(campaign: Campaign) -> str:
+def contexte_text(campaign: Campaign, exclure_seance: str | None = None) -> str:
     try:
         text = campaign.contexte_path.read_text(encoding="utf-8").strip()
     except OSError:
         text = ""
+    learned = glossaire.texte(campaign.path, exclure_seance)
+    if learned:
+        text = (text + "\n\n" if text else "") + "## Glossaire appris (corrections de transcription et réponses des joueurs)\n\n" + \
+            "\n".join(line for line in learned.splitlines() if not line.startswith("# "))
     return text or "(aucun contexte fourni)"
-
-
-def _ask(prompt: str) -> str:
-    return gemini.generate("", prompt, temperature=0.2, web_search=False, timeout_s=SET["campagnes.delai_attente_s"])
 
 
 def seance_dirs(campaign: Campaign) -> list:
@@ -233,6 +191,13 @@ def seance_text(campaign: Campaign, filename: str, session_id: str | None = None
     raise CampaignError(f"Aucune séance avec {filename} dans {campaign.titre}.")
 
 
+def _meta_type(d: Path) -> str:
+    try:
+        return json.loads((d / "meta.json").read_text(encoding="utf-8")).get("type", "")
+    except (OSError, ValueError):
+        return ""
+
+
 def session_choices(campaign: Campaign | None, sessions_root: Path, current: str = "", limit: int = 25) -> list:
     """Séances proposables : sessions enregistrées par le bot et séances de la campagne, du plus récent au plus ancien.
     -> [(identifiant, libellé)]."""
@@ -244,7 +209,8 @@ def session_choices(campaign: Campaign | None, sessions_root: Path, current: str
     if campaign is not None:
         for d in seance_dirs(campaign):
             if (d / "meta.json").exists():
-                tags.setdefault(d.name, []).append("intégrée")
+                kind = _meta_type(d)
+                tags.setdefault(d.name, []).append(kind.capitalize() if kind in ("chapitre", "livre") else "intégrée")
             elif (d / "pack" / "pack.json").exists():
                 tags.setdefault(d.name, []).append("pack prêt")
     wanted = current.strip().lower()
@@ -260,50 +226,5 @@ def latest_precedemment(campaign: Campaign) -> str | None:
     return None
 
 
-def summarize_session(campaign: Campaign, rows: list, session_id: str, progress=None) -> dict:
-    """Appels bloquants à Gemini (à lancer dans un thread). -> {'compte_rendu','precedemment','version','seance'}.
-
-    `rows` : lignes {'user','name','start','end','text'}. `progress(texte)` est appelé à chaque étape.
-    """
-    say = progress or (lambda _t: None)
-    seance = campaign.path / "seances" / session_id
-    if (seance / "meta.json").exists():
-        raise CampaignError(f"La séance {session_id} est déjà intégrée : fais d'abord `/campagne rollback` si elle est la dernière.")
-    cleaned = clean_rows(rows, labeler(campaign.joueurs()))
-    if not cleaned:
-        raise CampaignError("Aucune parole exploitable dans cette séance.")
-    seance.mkdir(parents=True, exist_ok=True)
-    (seance / "transcript_nettoye.txt").write_text(render_lines(cleaned) + "\n", encoding="utf-8")
-
-    contexte, etat = contexte_text(campaign), etat_text(campaign)
-    chunks = windows(cleaned, SET["campagnes.tranche_minutes"])
-    extractions = []
-    for n, chunk in enumerate(chunks, 1):
-        say(f"extraction {n}/{len(chunks)}")
-        extractions.append(f"## Tranche {n} ({hms(chunk[0][0])} – {hms(chunk[-1][1])})\n" + _ask(
-            PROMPT_EXTRACTION.format(regles_communes=REGLES_COMMUNES, contexte=contexte, etat=etat, n=n,
-                                     debut=hms(chunk[0][0]), fin=hms(chunk[-1][1]), texte=render_lines(chunk))))
-    extr = "\n\n".join(extractions)
-    (seance / "extractions.md").write_text(extr + "\n", encoding="utf-8")
-
-    say("compte rendu")
-    compte_rendu = _ask(PROMPT_COMPTE_RENDU.format(
-        regles_communes=REGLES_COMMUNES, contexte=contexte, etat=etat, extractions_des_tranches=extr,
-        date=session_date(session_id)))
-    (seance / "compte_rendu.md").write_text(compte_rendu + "\n", encoding="utf-8")
-
-    say("résumé global")
-    nouvel_etat = _ask(PROMPT_ETAT.format(regles_communes=REGLES_COMMUNES, etat=etat, compte_rendu=compte_rendu,
-                                          extractions_des_tranches=extr))
-    say("« précédemment »")
-    precedemment = _ask(PROMPT_PRECEDEMMENT.format(mots=longueur_precedemment(), regles_communes=REGLES_COMMUNES, etat=nouvel_etat,
-                                                   compte_rendu=compte_rendu, nom_campagne=campaign.titre))
-    (seance / "precedemment.md").write_text(precedemment + "\n", encoding="utf-8")
-    version = add_version(campaign, nouvel_etat, session_id)           # en dernier : tout a réussi
-    (seance / "meta.json").write_text(json.dumps({"version": version.name, "creee_le": datetime.now().isoformat(
-        timespec="seconds")}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    return {"compte_rendu": compte_rendu, "precedemment": precedemment, "version": version.name, "seance": seance}
-
-
-__all__ = ["summarize_session", "latest_precedemment", "parse_transcript_text", "labeler", "clean_rows", "windows",
+__all__ = ["latest_precedemment", "parse_transcript_text", "labeler", "clean_rows", "windows",
            "versions"]

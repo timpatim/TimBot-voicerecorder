@@ -1,4 +1,4 @@
-"""Voix du bot : synthèse vocale (OmniVoice ou Chatterbox), lancée dans un processus séparé (environnement conda dédié).
+"""Voix du bot : synthèse vocale (OmniVoice), lancée dans un processus séparé (environnement conda dédié).
 
 Module indépendant de Discord. Le texte est nettoyé, converti en WAV par tools/tts_<moteur>.py (exécuté avec le Python
 de l'environnement du moteur) et mis en cache dans la séance : le même texte n'est synthétisé qu'une fois.
@@ -20,15 +20,11 @@ from . import modeles
 from .config import SET
 
 ROOT = Path(__file__).resolve().parent.parent
-ENGINES = {   # moteur : (script, fichier du Python de son environnement, installeur)
-    "omnivoice": ("tts_omnivoice.py", ".voix_python_omnivoice", "install_omnivoice.bat"),
-    "chatterbox": ("tts_chatterbox.py", ".voix_python", "install_voix.bat"),
-}
+MOTEUR = "omnivoice"                      # seul moteur de synthèse (le nom reste dans l'empreinte des audios préparés)
+SCRIPT, PYTHON_FILE, INSTALLER = "tts_omnivoice.py", ".voix_python_omnivoice", "install_omnivoice.bat"
 SPEED_APPLIED = "VITESSE_APPLIQUEE"       # écrit par le worker quand le moteur a lui-même réglé la vitesse
 
 
-def engine() -> str:
-    return SET["voix.moteur"] if SET["voix.moteur"] in ENGINES else "omnivoice"
 REFERENCE_NAMES = ("voix.wav", "voix.mp3", "voix.flac")
 
 
@@ -43,7 +39,7 @@ def python_exe() -> str:
     if configured:
         return configured
     try:
-        saved = (ROOT / ENGINES[engine()][1]).read_text(encoding="utf-8", errors="replace").strip()
+        saved = (ROOT / PYTHON_FILE).read_text(encoding="utf-8", errors="replace").strip()
     except OSError:
         saved = ""
     return saved or sys.executable
@@ -146,12 +142,9 @@ def truncate_for_speech(text: str, limit: int) -> tuple:
 
 def settings_snapshot(reference: Path | None) -> dict:
     """Réglages qui influencent l'audio produit (sert à la clé du cache et à expliquer un audio préparé autrement)."""
-    snap = {"moteur": engine(), "langue": SET["voix.langue"], "vitesse": SET["voix.vitesse"], "pause_s": SET["voix.pause_s"],
+    snap = {"moteur": MOTEUR, "langue": SET["voix.langue"], "vitesse": SET["voix.vitesse"], "pause_s": SET["voix.pause_s"],
             "voix": "défaut"}
-    if engine() == "omnivoice":
-        snap["etapes"] = SET["voix.etapes"]
-    else:
-        snap["temperature"] = SET["voix.temperature"]
+    snap["etapes"] = SET["voix.etapes"]
     if reference is not None:
         st = reference.stat()
         snap["voix"] = f"{reference.name}:{st.st_size}:{st.st_mtime_ns}:{reference_text(reference)}"
@@ -280,7 +273,7 @@ class _Server:
         return self.proc is not None and self.proc.poll() is None
 
     def _command(self) -> list:
-        return [python_exe(), str(ROOT / "tools" / ENGINES[engine()][0]), "--serve", "--device", SET["voix.device"] or "auto"]
+        return [python_exe(), str(ROOT / "tools" / SCRIPT), "--serve", "--device", SET["voix.device"] or "auto"]
 
     def start(self) -> None:
         with self._lock:
@@ -297,7 +290,7 @@ class _Server:
                 self.proc, self.state = None, "échec"
                 self._ready.set()
                 raise VoixError(f"Impossible de lancer Python pour la voix ({e}). Vérifie `python` dans [voix] ou lance "
-                                f"{ENGINES[engine()][2]}.") from e
+                                f"{INSTALLER}.") from e
             threading.Thread(target=self._read_out, args=(self.proc,), daemon=True).start()
             threading.Thread(target=self._read_err, args=(self.proc,), daemon=True).start()
 
@@ -383,8 +376,8 @@ atexit.register(SERVER.stop)
 
 
 def use_server() -> bool:
-    """Processus permanent : seulement avec OmniVoice et quand Whisper reste chargé (sinon on libère la mémoire à chaque fois)."""
-    return engine() == "omnivoice" and not SET["voix.liberer_whisper"]
+    """Processus permanent : seulement quand Whisper reste chargé (sinon on libère la mémoire à chaque fois)."""
+    return not SET["voix.liberer_whisper"]
 
 
 def preload() -> bool:
@@ -466,7 +459,7 @@ TEMP_PREFIX = "voicebot_dire_"     # audios « à la volée » : fichiers tempor
 
 
 def ensure_free_audio(campaign: Campaign | None, text: str, progress=None, voice: str | None = None) -> Path:
-    """Audio d'un texte quelconque (/dire, /regle dicter, /campagne dicter avec une voix) dans un dossier temporaire.
+    """Audio d'un texte quelconque (/dicter, /regle dicter, /campagne dicter avec une voix) dans un dossier temporaire.
     Rien n'est conservé : l'appelant joue le WAV puis appelle `discard_free(wav)`. Même règles que ensure_audio :
     bloquant, jamais pendant un enregistrement (à l'appelant de le vérifier). Voix : `voice`, sinon celle de la campagne."""
     spoken = clean_for_speech(text)
@@ -485,6 +478,38 @@ def ensure_free_audio(campaign: Campaign | None, text: str, progress=None, voice
         raise
     finally:
         _lock.release()
+
+
+def shareable_audio(wav: Path, max_bytes: int = 9_500_000, copie: bool = False) -> Path | None:
+    """Fichier à joindre au message Discord : MP3 (ffmpeg) ou, à défaut, le WAV lui-même s'il est assez léger. None si rien ne tient
+    sous `max_bytes` (limite d'envoi de Discord). `copie=False` : WAV temporaire, MP3 écrit à côté. `copie=True` : WAV conservé (ex.
+    `precedemment.wav`), MP3 écrit dans un dossier temporaire. Un MP3 produit se supprime avec `discard_free`."""
+    import subprocess
+    from .config import SET
+    ffmpeg = shutil.which(SET["mp3.ffmpeg"])
+    if ffmpeg:
+        folder = Path(tempfile.mkdtemp(prefix=TEMP_PREFIX)) if copie else None
+        out = (folder / wav.with_suffix(".mp3").name) if folder else wav.with_suffix(".mp3")
+        try:
+            r = subprocess.run([ffmpeg, "-nostdin", "-y", "-loglevel", "error", "-i", str(wav), "-codec:a", "libmp3lame",
+                                "-b:a", "128k", "-ac", "1", str(out)], capture_output=True, timeout=600,
+                               creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            if r.returncode == 0 and out.exists() and out.stat().st_size <= max_bytes:
+                return out
+        except (OSError, subprocess.SubprocessError):
+            pass
+        if folder is not None:
+            shutil.rmtree(folder, ignore_errors=True)
+    return wav if wav.exists() and wav.stat().st_size <= max_bytes else None
+
+
+def why_not_shareable(wav: Path) -> str:
+    """Pourquoi `shareable_audio` n'a rien donné (pour le dire à l'utilisateur)."""
+    from .config import SET
+    size = wav.stat().st_size / 1e6 if wav.exists() else 0
+    if not shutil.which(SET["mp3.ffmpeg"]):
+        return f"le WAV fait {size:.1f} Mo (limite d'envoi de Discord ≈ 10 Mo) et ffmpeg est introuvable pour le convertir en MP3 (réglage [mp3] ffmpeg)."
+    return f"le WAV fait {size:.1f} Mo et même en MP3 il dépasse la limite d'envoi de Discord (≈ 10 Mo), ou la conversion a échoué (voir la console)."
 
 
 def discard_free(wav: Path | None) -> None:
@@ -534,15 +559,11 @@ def _synthesize_to(wav: Path, meta: Path, src: Path, reference: Path | None, spo
     wav.unlink(missing_ok=True)
     meta.unlink(missing_ok=True)
     src.write_text(spoken + "\n", encoding="utf-8")
-    script, _pyfile, installer = ENGINES[engine()]
-    cmd = [python_exe(), str(ROOT / "tools" / script), "--in", str(src), "--out", str(wav), "--lang", SET["voix.langue"],
+    cmd = [python_exe(), str(ROOT / "tools" / SCRIPT), "--in", str(src), "--out", str(wav), "--lang", SET["voix.langue"],
            "--device", SET["voix.device"] or "auto", "--pause", str(SET["voix.pause_s"])]
-    if engine() == "omnivoice":
-        cmd += ["--steps", str(SET["voix.etapes"])]            # vitesse : ffmpeg après coup (atempo), pas le modèle
-        if reference is not None and reference_text(reference):
-            cmd += ["--voice-text", reference_text(reference)]
-    else:
-        cmd += ["--temperature", str(SET["voix.temperature"])]
+    cmd += ["--steps", str(SET["voix.etapes"])]                # vitesse : ffmpeg après coup (atempo), pas le modèle
+    if reference is not None and reference_text(reference):
+        cmd += ["--voice-text", reference_text(reference)]
     if reference is not None:
         cmd += ["--voice", str(reference)]
     runner = _server_run if use_server() else _run
@@ -554,16 +575,12 @@ def _synthesize_to(wav: Path, meta: Path, src: Path, reference: Path | None, spo
         raise VoixError(f"La synthèse vocale a dépassé {SET['voix.delai_s']} s (`delai_s` dans [voix]) : "
                         "GPU absent ou occupé ?") from None
     except OSError as e:
-        raise VoixError(f"Impossible de lancer Python pour la voix ({e}). Vérifie `python` dans [voix] ou lance install_voix.bat.") from e
+        raise VoixError(f"Impossible de lancer Python pour la voix ({e}). Vérifie `python` dans [voix] ou lance {INSTALLER}.") from e
     err = (done.stderr or b"").decode("utf-8", errors="replace")
     if done.returncode != 0 or not wav.exists():
         wav.unlink(missing_ok=True)
-        if "No module named" in err and ("chatterbox" in err or "omnivoice" in err or "torch" in err):
-            raise VoixError(f"{engine().capitalize()} n'est pas installé dans cet environnement : lance {installer}.")
-        if "PerthImplicitWatermarker" in err:
-            raise VoixError('Le filigrane « perth » de Chatterbox ne s\'importe pas (souvent : setuptools trop récent). Dans '
-                            'l\'environnement de la voix : `pip install "setuptools<81"`, puis relance. Détail : '
-                            + (err.strip().splitlines() or [""])[-1][:200])
+        if "No module named" in err and ("omnivoice" in err or "torch" in err):
+            raise VoixError(f"OmniVoice n'est pas installé dans cet environnement : lance {INSTALLER}.")
         if "out of memory" in err.lower():
             raise VoixError("Mémoire GPU insuffisante pour la voix : mets `device = cpu` dans [voix] (plus lent).")
         tail = " | ".join(line.strip() for line in err.strip().splitlines()[-3:]) or f"code {done.returncode}"

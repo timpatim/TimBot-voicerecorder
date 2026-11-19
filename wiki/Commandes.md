@@ -4,9 +4,9 @@ Toutes les commandes sont des commandes slash, utilisables sur un serveur (pas e
 « privé » ne sont visibles que par la personne qui lance la commande ; les autres sont publiées **dans le salon où la
 commande est tapée**. Le salon `canal_messages` de [`[discord]`](Configuration#discord), s'il est renseigné, ne reçoit que
 les messages système et informatifs : suivi de fin de session, alertes, **une ligne de trace à chaque commande lancée**
-(`▶️ Nom : /commande paramètres`, sans le contenu des fichiers joints), le compte rendu de `/campagne resumer` et
-`integrer`, et les fichiers de `/campagne pack sortie:fichier`. Les réponses de `/regle`, `/transcript`, `/stats` et
-`/campagne afficher` restent dans le salon de la commande ; `/config` et `/campagne rollback` répondent en privé.
+(`▶️ Nom : /commande paramètres`, sans le contenu des fichiers joints) et le compte rendu de `/campagne resumer` et
+`/campagne condenser`. Les réponses de `/regle`, `/transcript`, `/stats` et `/campagne afficher` restent dans le salon de
+la commande ; `/config` et `/campagne rollback` répondent en privé.
 
 > Les commandes n'apparaissent parfois qu'après un rafraîchissement du client Discord (**Ctrl+R**). Pour une
 > synchronisation instantanée, renseignez `guild_id` dans `[discord]`.
@@ -17,20 +17,18 @@ les messages système et informatifs : suivi de fin de session, alertes, **une l
 | [`/stop`](#stop) | Arrête et lance le traitement de fin de session | tous |
 | [`/status`](#status) | État de l'enregistrement, de la file de transcription et de Drive | tous |
 | [`/stats`](#stats) | Statistiques de la session en cours | tous |
-| [`/retranscrire`](#retranscrire) | Refait le transcript d'une session depuis ses fichiers audio | *Gérer le serveur* |
 | [`/transcript`](#transcript) | Derniers messages transcrits | tous |
-| [`/dire`](#dire) | Le bot dit un texte à voix haute dans votre canal vocal | *Gérer le serveur* |
+| [`/retranscrire`](#retranscrire) | Refait le transcript d'une session depuis ses fichiers audio | *Gérer le serveur* |
+| [`/dicter`](#dicter) | Le bot dit un texte à voix haute dans votre canal vocal | *Gérer le serveur* |
 | [`/regle`](#regle) | Explication d'une règle de jeu par Gemini | tous |
-| [`/config`](#config) | Affiche ou modifie le traitement de fin de session | modifier : *Gérer le serveur* |
-| [`/campagne`](#campagne) | Campagnes de jeu de rôle, mémoire et voix | voir le tableau des actions |
-
-Voir aussi l'[arbre des commandes](#arbre-des-commandes) pour les paramètres valides de chaque action.
+| [`/config`](#config) | Affiche ou modifie les étapes de fin de session | modifier : *Gérer le serveur* |
+| [`/campagne`](#campagne) | Campagnes de jeu de rôle : mémoire, résumés, voix (sous-commandes) | voir le tableau |
+| [`/glossaire`](#glossaire) | Glossaire appris de la campagne : afficher, corriger, annuler | corriger, annuler : *Gérer le serveur* |
 
 ## Arbre des commandes
 
-Discord propose **tous** les paramètres de `/campagne` quelle que soit l'action choisie, y compris ceux qui n'ont aucun
-sens pour elle (par exemple `/campagne dicter mj:@quelqu'un`). Un paramètre qui ne concerne pas l'action est simplement
-**ignoré**. Cet arbre indique ce qui est réellement utilisé.
+`/campagne` et `/glossaire` sont des **groupes de sous-commandes** : Discord ne propose que les paramètres de la
+sous-commande choisie.
 
 Légende : `*` obligatoire · `[ ]` facultatif · `🔒` demande la permission « Gérer le serveur ».
 
@@ -39,71 +37,45 @@ Légende : `*` obligatoire · `[ ]` facultatif · `🔒` demande la permission �
 /stop
 /status
 /stats
-/retranscrire 🔒  [session]
 /transcript  [nombre]
-/dire        🔒   texte*  [nom_voix]
+/retranscrire 🔒  [session]
+/dicter      🔒   texte*  [nom_voix]
 /regle       [jeu]  [phrases]  [question]  [dicter [nom_voix]]
 /config      [cle [valeur]]            🔒 pour modifier une valeur
 
-/campagne  action:
+/campagne
 ├─ liste
 ├─ info             [nom]
-├─ afficher         [nom]  [quoi]  [session]  [rubrique]
-├─ dicter           [nom]  [session]  [nom_voix]
 ├─ nouvelle    🔒   nom*  [jeu]  [mj]
 ├─ choisir     🔒   nom*
 ├─ mj          🔒   mj*  [nom]
 ├─ joueur      🔒   membre*  [personnage]  [nom]
-├─ contexte    🔒   fichier*  [nom]
+├─ contexte    🔒   [fichier]  [nom]
 ├─ journal     🔒   fichier*  [nom]
-├─ pack        🔒   [fichier + session*]  [minutes]  [sortie]  [partie]  [nom]
-├─ integrer    🔒   [fichier]  [session]  [nom]
+├─ afficher         [quoi]  [session]  [rubrique]  [nom]
 ├─ resumer     🔒   [fichier + session*]  [nom]
+├─ condenser   🔒   [de + a*]  [titre]  [niveau]  [nom]
 ├─ rollback    🔒   [nom]
-├─ audio       🔒   [session]  [nom_voix]  [nom]
-├─ audio force 🔒   [session]  [nom_voix]  [nom]
+├─ audio       🔒   [session]  [nom_voix]  [forcer]  [nom]
+├─ dicter           [session]  [nom_voix]  [nom]
 └─ voix             [nom_voix]  [nom]        🔒 pour changer la voix (sans `nom_voix` : liste)
+
+/glossaire
+├─ afficher         [nom]
+├─ corriger    🔒   precision*  [nom]
+└─ annuler     🔒   [nom]
 ```
 
 Précisions :
 
-- **`nom`** désigne la campagne visée. Sans `nom`, c'est la campagne active. Seules `nouvelle` et `choisir` l'exigent.
+- **`nom`** désigne la campagne visée (le début du nom suffit). Sans `nom`, c'est la campagne active. Seules `nouvelle` et
+  `choisir` l'exigent.
 - **`afficher`** : `quoi` vaut *compte rendu* par défaut, ou *résumé global* si `rubrique` est donnée. `rubrique` ne
   s'applique qu'au résumé global, et `session` seulement au compte rendu et au « précédemment ».
-- **`pack`** et **`resumer`** : sans `fichier`, le bot prend la dernière session enregistrée (ou `session`). Avec un
-  `fichier` joint, `session` devient **obligatoire** (`2026-10-24` ou `2026-10-24_190000`) : c'est la date de la séance.
-- **`pack`** copie le pack dans le **presse-papiers de la machine du bot** (partie par partie avec `partie`) ; `sortie:fichier`
-  le publie à la place en fichier(s) dans le salon. Le bot ne peut pas savoir si votre client Discord est sur la même machine :
-  si ce n'est pas le cas, mettez `presse_papiers = non` dans [`[campagnes]`](Configuration#campagnes) et utilisez les fichiers.
-  Refusé si la machine n'a pas de presse-papiers utilisable.
-- **`integrer`** lit la réponse dans le presse-papiers (copiez-la dans le chat avec son bouton « Copier ») ; avec `fichier`,
-  elle est lue dans le fichier joint. `session` sert à choisir la séance à laquelle rattacher la réponse ; par défaut, la séance en attente.
-- **`audio`** et **`audio force`** : refusées pendant un enregistrement seulement si `liberer_whisper = oui`.
-- **`liste`** n'utilise aucun paramètre.
-
-### Tableau croisé
-
-| Action | `nom` | `jeu` | `mj` | `membre` | `personnage` | `quoi` | `rubrique` | `minutes` | `session` | `fichier` | `nom_voix` | `sortie` | `partie` |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| `liste` | | | | | | | | | | |  | | |
-| `info` | ○ | | | | | | | | | |  | | |
-| `afficher` | ○ | | | | | ○ | ○ | | ○ | |  | | |
-| `dicter` | ○ | | | | | | | | ○ | | ○ | | |
-| `nouvelle` | ● | ○ | ○ | | | | | | | |  | | |
-| `choisir` | ● | | | | | | | | | |  | | |
-| `mj` | ○ | | ● | | | | | | | |  | | |
-| `joueur` | ○ | | | ● | ○ | | | | | |  | | |
-| `contexte` | ○ | | | | | | | | | ● |  | | |
-| `journal` | ○ | | | | | | | | | ● |  | | |
-| `pack` | ○ | | | | | | | ○ | ◐ | ○ |  | ○ | ○ |
-| `integrer` | ○ | | | | | | | | ○ | ○ |  | | |
-| `resumer` | ○ | | | | | | | | ◐ | ○ |  | | |
-| `rollback` | ○ | | | | | | | | | |  | | |
-| `audio` | ○ | | | | | | | | ○ | | ○ | | |
-| `audio force` | ○ | | | | | | | | ○ | | ○ | | |
-| `voix` | ○ | | | | | | | | | | ○ | | |
-
-● obligatoire · ○ facultatif · ◐ obligatoire si un `fichier` est joint · case vide : ignoré.
+- **`resumer`** : sans `fichier`, le bot prend la dernière session enregistrée (ou `session`). Avec un `fichier` joint
+  (un transcript existant), `session` devient **obligatoire** (`2026-10-24` ou `2026-10-24_190000`) : c'est la date de la séance.
+- **`condenser`** : `de` et `a` vont ensemble ; sans eux, Claude propose les regroupements.
+- **`audio`** : refusée pendant un enregistrement seulement si `liberer_whisper = oui`.
 
 ## Enregistrement
 
@@ -130,8 +102,10 @@ dans l'ordre, une étape en échec n'empêche pas les suivantes, et leur statut 
 2. transcript final et statistiques,
 3. conversion MP3,
 4. rapport PDF,
-5. mémoire de campagne (seulement si le résumé par API Gemini est activé ; sinon à la demande avec `/campagne resumer` ou `/campagne pack`),
-6. envoi sur Google Drive et lien de partage.
+5. envoi sur Google Drive et lien de partage.
+
+La mémoire de campagne (compte rendu, résumé global, « précédemment ») ne fait pas partie de ces étapes : elle se lance à
+la demande avec [`/campagne resumer`](#campagne).
 
 Les étapes MP3, rapport, Drive et partage se règlent dans [`[fin_de_session]`](Configuration#fin_de_session) ou avec
 [`/config`](#config) ; ce réglage est relu à chaque `/stop`. Refusée s'il n'y a pas d'enregistrement en cours.
@@ -178,7 +152,7 @@ commande est le seul moyen de les voir pendant la session.
 
 ## Voix
 
-### `/dire`
+### `/dicter`
 
 | Paramètre | Rôle |
 |---|---|
@@ -188,14 +162,18 @@ commande est le seul moyen de les voir pendant la session.
 Le bot rejoint **votre** canal vocal, dit le texte, puis le quitte. Permission « Gérer le serveur » ; la voix doit être
 activée (`activer = oui`). La mise en forme (gras, titres, `[secret:…]`) est retirée avant la lecture.
 
-Fonctionnement : le bot libère Whisper de la mémoire, synthétise (barre de progression), rejoue, puis recharge Whisper.
-La voix est celle du paramètre `nom_voix`, sinon celle de la campagne active (`/campagne voix`), sinon la voix par défaut du moteur. **L'audio n'est jamais conservé** : il est généré dans un dossier temporaire,
-supprimé dès la lecture terminée (les restes d'un arrêt brutal sont effacés au démarrage du bot). Redire le même texte le
-resynthétise. Un ancien dossier `campagnes/<campagne>/dires/` peut être supprimé : le bot ne s'en sert plus.
+La voix est celle du paramètre `nom_voix`, sinon celle de la campagne active (`/campagne voix`), sinon la voix par défaut
+globale. **L'audio n'est pas conservé sur la machine du bot** : il est généré dans un dossier temporaire, supprimé dès la
+lecture terminée (les restes d'un arrêt brutal sont effacés au démarrage du bot). En revanche il vous est **envoyé en pièce
+jointe dans un message privé** « ⬇️ Audio à télécharger » (MP3 si ffmpeg est installé, sinon WAV) ; au-delà de 10 Mo environ,
+ou si Discord refuse l'envoi, un message en donne la raison. Redire le même texte le resynthétise.
 
 **Pendant un enregistrement** : autorisée si `liberer_whisper = non` (défaut) : le bot parle dans le canal de la séance et sa
 voix n'est pas transcrite. Avec `liberer_whisper = oui`, elle est refusée (la synthèse retire Whisper de la mémoire, la
 transcription s'arrêterait) ; [`/campagne dicter`](#campagne) lit alors le « précédemment » déjà préparé.
+
+Le même verbe sert partout : `/dicter` (un texte libre), `/campagne dicter` (le « précédemment ») et l'option `dicter` de
+`/regle` (la réponse).
 
 ### Voix de la campagne : `/campagne voix`
 
@@ -210,7 +188,7 @@ OmniVoice). Ajouter un fichier suffit, sans redémarrer. `défaut` désigne la v
 
 Changer la voix demande « Gérer le serveur » ; le choix est enregistré dans `campagne.json` (`"voix": "<nom>"`). Ordre de
 priorité : paramètre `nom_voix` d'une commande > voix de la campagne > ancien `voix.wav` du dossier de la campagne > réglage
-`voix_reference` > voix par défaut du moteur. Les audios déjà préparés restent lisibles ; `/campagne audio force` les refait
+`voix_reference` (voix par défaut globale) > voix par défaut d'OmniVoice. Les audios déjà préparés restent lisibles ; `/campagne audio forcer:oui` les refait
 avec la nouvelle voix. **N'utilisez que la voix d'une personne qui a donné son accord.**
 
 ## Règles de jeu
@@ -230,8 +208,8 @@ est trop vague ou noyé, `question` envoie à la place un texte libre (consigne 
 n'est alors nécessaire et rien du transcript n'est transmis. Nécessite une clé d'API Gemini (`GEMINI_API_KEY` ou `cle_api`).
 Sans `question`, il faut un enregistrement en cours.
 
-Avec `dicter`, la réponse écrite est publiée normalement puis lue ; les conditions sont vérifiées **avant** d'appeler Gemini
-(voix activée, canal vocal à rejoindre, pas de conflit avec Whisper, voix existante, comme pour [`/dire`](#dire)). La lecture est
+Avec `dicter`, la réponse écrite est publiée normalement puis lue ; l'audio est joint à un message privé (MP3 si ffmpeg est installé, sinon WAV, 10 Mo au plus) pour le télécharger ; les conditions sont vérifiées **avant** d'appeler Gemini
+(voix activée, canal vocal à rejoindre, pas de conflit avec Whisper, voix existante, comme pour [`/dicter`](#dicter)). La lecture est
 coupée à la dernière phrase entière avant `dire_max` caractères (600) ; un message privé le signale. Un délai minimal sépare deux appels sur un
 même serveur (`delai_min_s`). Les phrases transmises sont envoyées à Google, avec le nom de leurs auteurs. La réponse
 vient d'un modèle d'IA et d'une transcription automatique : à vérifier dans le livre de règles.
@@ -253,57 +231,60 @@ ainsi : `mp3`, `mp3_kbps`, `rapport`, `drive`, `drive_audio`, `drive_transcript`
 
 ### `/campagne`
 
-La commande unique de gestion des campagnes. Son paramètre `action` se choisit dans une liste ; les autres paramètres
-dépendent de l'action. Les réponses sont privées, sauf `afficher`.
+Un groupe de sous-commandes. Une campagne est un dossier dans `campagnes/` ; la campagne **active** est la dernière
+choisie. Les réponses sont privées, sauf `afficher`. Voir la page [Accueil](Home) pour le déroulement complet.
 
-Une campagne est un dossier dans `campagnes/` ; la campagne **active** est la dernière choisie. Voir la page
-[Accueil](Home) pour le déroulement complet.
+#### Sous-commandes de lecture (tout le monde)
 
-| Paramètre | Rôle |
-|---|---|
-| `action` | L'action à effectuer (voir ci-dessous) |
-| `nom` | Nom de la campagne (`nouvelle`, `choisir`) ; pour `info`, la campagne à décrire si ce n'est pas l'active |
-| `jeu` | Jeu de la nouvelle campagne (défaut : `jeu_par_defaut`) |
-| `mj` | MJ de la campagne (`nouvelle`, `mj`) |
-| `membre` | Membre à ajouter comme joueur (`joueur`) |
-| `personnage` | Personnage joué, de préférence décrit dans `contexte.md` (`joueur`) |
-| `quoi` | Contenu à afficher : compte rendu, précédemment, résumé global (`afficher`) |
-| `rubrique` | Une seule rubrique du résumé global, proposée en autocomplétion (`afficher`) |
-| `minutes` | Durée d'une partie de pack en minutes, 0 = pas de découpe (`pack`) |
-| `session` | Identifiant de séance, proposé en autocomplétion (`pack`, `integrer`, `resumer`, `afficher`, `dicter`, `audio`) |
-| `fichier` | Fichier texte joint (`contexte`, `journal`, `pack`, `integrer` : facultatif, sinon presse-papiers, `resumer`) |
-| `sortie` | `pack` : `presse-papiers` (défaut) ou `fichier` |
-| `partie` | `pack` copié dans le presse-papiers : numéro de la partie à copier (défaut 1) |
-| `nom_voix` | Nom d'une voix, proposé en autocomplétion : voix de l'audio préparé (`audio`, par défaut celle de la campagne), voix de la lecture à la volée (`dicter`) ou voix à donner à la campagne (`voix`) |
+| Sous-commande | Paramètres | Effet |
+|---|---|---|
+| `liste` | | Liste les campagnes ; la campagne active est marquée ▶, avec son nombre de séances intégrées et de condensés |
+| `info` | `nom` | Détails de la campagne : MJ, joueurs, séances, résumé global |
+| `afficher` | `quoi`, `session`, `rubrique`, `nom` | Affiche le compte rendu, le « précédemment » ou le résumé global, pour la dernière séance ou pour `session`. Avec `rubrique`, n'affiche que cette partie du résumé (fils ouverts, lieux, alliés…). Au-delà de 3 900 caractères, le texte est envoyé en fichier. La « dernière séance » peut être un condensé (voir `condenser`) |
+| `dicter` | `session`, `nom_voix`, `nom` | Le bot lit à voix haute le « précédemment » dans votre canal vocal (ou dans l'enregistrement en cours). Sans `nom_voix` : lit l'audio préparé (voir `audio`). Avec `nom_voix` : le génère à la volée avec cette voix, sans toucher à l'audio préparé (refusé pendant un enregistrement si `liberer_whisper = oui`). L'audio vous est aussi envoyé en pièce jointe dans un message privé ; `precedemment.wav` n'est jamais supprimé |
+| `voix` | `nom_voix`, `nom` | Sans `nom_voix` : liste les voix disponibles et celle de la campagne. Avec `nom_voix` : la choisit pour la campagne (*Gérer le serveur*). Voir [Voix](#voix) |
 
-#### Actions de lecture (tout le monde)
+#### Sous-commandes de gestion (permission « Gérer le serveur »)
 
-| Action | Effet |
-|---|---|
-| `liste` | Liste les campagnes ; la campagne active est marquée ▶ |  |
-| `info` | Détails de la campagne : MJ, joueurs, séances, versions du résumé global |  |
-| `afficher` | Affiche le `quoi` voulu (compte rendu, « précédemment » ou résumé global) de la dernière séance ou de `session`. Avec `rubrique`, n'affiche que cette partie du résumé (fils ouverts, lieux, alliés…). Au-delà de 3 900 caractères, le texte est envoyé en fichier |  |
-| `dicter` | Le bot lit à voix haute le « précédemment » dans votre canal vocal (ou dans l'enregistrement en cours). Sans `nom_voix` : lit l'audio préparé (voir `audio`). Avec `nom_voix` : génère le « précédemment » à la volée avec cette voix, lit, puis supprime l'audio ; l'audio préparé n'est ni lu ni remplacé (refusé pendant un enregistrement si `liberer_whisper = oui`). Sans enregistrement, le bot rejoint votre canal le temps de la lecture |  |
-
-#### Actions de gestion (permission « Gérer le serveur »)
-
-| Action | Paramètres | Effet |
+| Sous-commande | Paramètres | Effet |
 |---|---|---|
 | `nouvelle` | `nom`, `jeu`, `mj` | Crée la campagne et la rend active. Les membres du canal vocal deviennent joueurs ; le MJ n'est jamais déduit |
 | `choisir` | `nom` | Change la campagne active (impossible pendant un enregistrement) |
-| `mj` | `mj` | Désigne le MJ |
-| `joueur` | `membre`, `personnage` | Ajoute ou met à jour un joueur, et l'associe à un personnage décrit dans `contexte.md` |
-| `contexte` | `fichier` | Gemini structure votre texte (personnages, secrets, glossaire) en `contexte.md`. Aucun secret n'est déduit : sans indication, un fait est marqué `[à confirmer]`. Si `contexte.md` est déjà rempli, la proposition va dans `contexte_propose.md`. *Texte envoyé à Google* |
-| `journal` | `fichier` | Importe un journal existant comme version 1 du résumé global |
-| `pack` | `fichier`, `session`, `minutes`, `sortie`, `partie` | Prépare les prompts à coller dans un chat (Claude, Gemini…) et les copie dans le presse-papiers (ou en fichier avec `sortie:fichier`). Avec un transcript joint, `session` est obligatoire |
-| `integrer` | `fichier` (facultatif) | Réinjecte la réponse du chat (`=== COMPTE RENDU ===`, `=== RESUME GLOBAL ===`, `=== PRECEDEMMENT ===`) après contrôle de lecture. Crée la version suivante du résumé global et prépare l'audio du « précédemment » |
-| `resumer` | `fichier`, `session` | **Automatique** : pack → programme `claude` de ton abonnement → intégration (compte rendu, « précédemment », résumé global). `rollback` pour annuler. Réglages dans `[claude]` ; `moteur_resume = gemini` pour l'ancienne méthode. Sans fichier, reprend la dernière session enregistrée. *Texte envoyé à Anthropic* |
-| `rollback` | | Annule la dernière version du résumé global **et** la séance associée (déplacée dans `seances/_annulees/`) |
-| `audio` | `session`, `nom_voix` | Prépare l'audio du « précédemment ». Avec `liberer_whisper = oui`, Whisper est libéré de la mémoire pendant la synthèse puis rechargé, et la commande est refusée pendant un enregistrement |
-| `audio force` | `session`, `nom_voix` | Refait l'audio même s'il est prêt (synthèse ratée, bruits). L'ancien est gardé en `precedemment.precedent.wav` |
-| `voix` | `nom_voix`, `nom` | Sans `nom_voix` : liste les voix disponibles et celle de la campagne. Avec `nom_voix` : la choisit pour la campagne (*Gérer le serveur*), enregistrée dans `campagne.json`. Voir [Voix](#voix) |
+| `mj` | `mj`, `nom` | Désigne le MJ |
+| `joueur` | `membre`, `personnage`, `nom` | Ajoute ou met à jour un joueur, et l'associe à un personnage décrit dans `contexte.md` |
+| `contexte` | `fichier`, `nom` | Claude structure votre texte (personnages, secrets, glossaire) en `contexte.md`. Aucun secret n'est déduit : sans indication, un fait est marqué `[à confirmer]`. Si `contexte.md` est déjà rempli, la proposition va dans `contexte_propose.md`. Sans `fichier`, le bot relit `contexte_brut.txt` du dossier de la campagne. *Texte envoyé à Anthropic (votre abonnement Claude)* |
+| `journal` | `fichier`, `nom` | Importe un journal existant comme version 1 du résumé global |
+| `resumer` | `fichier`, `session`, `nom` | Résume une séance en trois appels à `claude` (votre abonnement) : nettoyage du transcript (corrections validées par le bot) → analyse et questions de scénario aux joueurs (réponses avec un bouton de validation, réservées à *Gérer le serveur*, jamais bloquantes) → version finale intégrée, glossaire mis à jour, audio du « précédemment » préparé. Le modèle ne renvoie que ce qui change : les anciennes séances ne sont jamais réécrites. **Informations « à retenir »** : le modèle repère lui-même les demandes orales de retenir une information (« retiens bien ce que vient d'expliquer le MJ ») et la fait figurer dans une rubrique « À retenir » du compte rendu, dans la chronologie et dans les rubriques concernées. Avec un transcript joint, `session` est obligatoire. Réglages dans [`[claude]`](Configuration#claude) (`nettoyage`, `questions`…). *Texte envoyé à Anthropic* |
+| `condenser` | `de`, `a`, `titre`, `niveau`, `nom` | Condense la « Chronologie » du résumé global : des blocs consécutifs (des séances, puis des chapitres) sont remplacés par un seul bloc *Chapitre* ou *Livre* qui garde l'essentiel, avec une section **Suite** quand la dernière séance ouvre un nouvel arc. Sans `de`/`a`, Claude propose les regroupements ; un aperçu est affiché avant validation. **Chaque condensé devient aussi une séance** : un dossier `seances/<dernière séance couverte>_chapitre_<titre>/` avec son compte rendu, son « précédemment » et son audio. Les comptes rendus des séances jouées ne sont jamais touchés. *Texte envoyé à Anthropic* |
+| `rollback` | `nom` | Annule la dernière version du résumé global **et** la séance ou les condensés associés (déplacés dans `seances/_annulees/`) |
+| `audio` | `session`, `nom_voix`, `forcer`, `nom` | Prépare l'audio du « précédemment ». `forcer:oui` le refait même s'il est prêt (synthèse ratée, autre voix) ; l'ancien est gardé en `precedemment.precedent.wav`. Avec `liberer_whisper = oui`, Whisper est libéré pendant la synthèse et la commande est refusée pendant un enregistrement |
 
-Presque toutes les actions de gestion sont refusées pendant un enregistrement.
+Presque toutes les sous-commandes de gestion sont refusées pendant un enregistrement.
+
+**Quel « précédemment » est lu ?** Toujours celui de la **dernière séance de la campagne, réelle ou condensée** (`/record`,
+`afficher`, `dicter`). Si un condensé couvre la dernière séance, c'est le sien ; s'il existe des séances plus récentes, c'est
+celui de la plus récente ; une nouvelle séance résumée reprend la main automatiquement. Un condensé dont les blocs n'ont pas
+de date est rangé d'après sa position dans la chronologie : il ne passe jamais devant des séances qu'il ne couvre pas.
+
+**Reprendre une campagne déjà commencée** : `contexte` (personnages et joueurs), `journal` (le journal existant) puis, pour
+chaque transcript existant, `resumer fichier:… session:<date>`.
+
+### `/glossaire`
+
+| Sous-commande | Paramètres | Effet |
+|---|---|---|
+| `afficher` | `nom` | Affiche le glossaire appris (entrées numérotées). Ouvert à tous |
+| `corriger` | `precision`, `nom` | Une information du glossaire était fausse : `precision` dit ce qui était faux et la bonne information, en une ou deux phrases. *Gérer le serveur* |
+| `annuler` | `nom` | Restaure le glossaire d'avant la dernière correction. *Gérer le serveur* |
+
+Le glossaire (`glossaire.md` dans le dossier de la campagne, modifiable à la main) garde les noms corrigés et les décisions
+prises en répondant aux questions de `/campagne resumer`. Quand une de ces informations s'avère fausse (un personnage
+confondu avec un autre…), `/glossaire corriger precision:"Le chef du fort n'est pas Lucien, c'est Thrune"` demande à Claude
+les **opérations** à faire (supprimer, remplacer, ajouter), jamais un glossaire réécrit. Un **aperçu** s'affiche avec les
+boutons *Appliquer* / *Annuler* : rien n'est modifié avant le clic. L'ancien glossaire est sauvegardé dans
+`glossaire_versions/` et la précision est ajoutée comme décision datée.
+
+Seules les analyses à venir en profitent : pour refaire la dernière séance, `/campagne rollback` puis `/campagne resumer`.
 
 ## Voir aussi
 

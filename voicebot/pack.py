@@ -1,11 +1,9 @@
-"""Packs de prompts à coller dans une interface de chat (Gemini, Claude...) et intégration de la réponse.
+"""Pack d'une séance : le prompt complet envoyé à Claude (consignes, contexte, état de la campagne, transcript nettoyé) et
+l'intégration de sa réponse (compte rendu, résumé global, « précédemment »). Module indépendant de Discord.
 
-Aucun appel d'API : le bot prépare des fichiers, l'humain les colle dans le chat de son choix, relit la réponse puis la
-réinjecte avec /campagne integrer. Module indépendant de Discord.
-
-Une séance longue est découpée en parties (campagnes.pack_minutes). Chaque partie produit des notes ; la dernière
-partie produit en plus les livrables (compte rendu, changements, paragraphe de chronologie, rubriques modifiées, « précédemment »). Chaque réponse commence par `=== FIN LUE === hh:mm:ss` : l'horodatage de
-la dernière réplique réellement lue, comparé à l'horodatage attendu pour détecter une lecture tronquée.
+La réponse commence par `=== FIN LUE === hh:mm:ss` : l'horodatage de la dernière réplique réellement lue, comparé à
+l'horodatage attendu pour détecter une lecture tronquée. Utilisé par `analyse.py` (pipeline de /campagne resumer) et par
+`resume_with_claude` (un seul appel, quand le nettoyage et les questions sont désactivés).
 """
 import json
 import re
@@ -27,6 +25,10 @@ STRUCTURE_ETAT = """Si l'état de la campagne ci-dessus est vide, donne dans SEC
 TACHE_NOTES = """TÂCHE : extraire les événements de jeu de cette partie de la transcription.
 Liste à puces chronologique. Chaque puce : l'horodatage [hh:mm:ss] du début du fait, ce qui se passe (qui fait quoi, résultat) et un indice de confiance ● sûr / ◐ probable / ○ incertain. Marque [secret:X] les faits secrets. Regroupe les combats en quelques puces (déroulé, issue, pertes importantes) sans détailler chaque jet de dés. Termine par « Noms douteux » et « Fils ouverts » (questions posées, indices, décisions annoncées). Aucun résumé du hors-jeu."""
 
+RETENIR_NOTES = """DEMANDES « À RETENIR » : il arrive qu'un joueur demande, à voix haute, de retenir ou de noter une information (par exemple « l'IA, retiens bien ce que vient d'expliquer le MJ »). Repère toi-même ces demandes dans cette partie, quelle que soit leur formulation, et identifie l'information visée (le plus souvent dite juste avant la demande, parfois juste après). Dans tes notes, ajoute pour chacune une puce « ★ À RETENIR » avec l'information complète (noms, chiffres, lieux, conditions : sans rien perdre)."""
+
+RETENIR_FINAL = """INFORMATIONS À RETENIR : repère aussi toi-même, dans la transcription, les moments où un joueur demande à voix haute de retenir ou de noter une information (quelle que soit la formulation ; l'information visée est le plus souvent dite juste avant, parfois juste après), et reprends les puces « ★ À RETENIR » de tes notes. Chacune DOIT figurer dans le compte rendu, dans une rubrique « À retenir » placée avant « Où on en est », une puce par information, complète et précise (noms, chiffres, lieux, conditions : ne perds aucun détail). Elle doit aussi figurer dans la chronologie et, si elle concerne un personnage, un lieu ou un fil ouvert, dans la rubrique correspondante de SECTIONS. Ces puces ne comptent pas dans la limite de mots du compte rendu. S'il n'y a aucune demande de ce genre, n'ajoute pas la rubrique."""
+
 TACHE_LIVRABLES = """TÂCHE FINALE : à partir de la transcription (et de tes notes si la séance était en plusieurs parties), produis les documents ci-dessous. Ne recopie JAMAIS l'état actuel de la campagne : donne seulement ce qui change, le programme fait lui-même la fusion.
 
 === COMPTE RENDU ===
@@ -36,13 +38,21 @@ Compte rendu de la séance du {date}, destiné à TOUS les joueurs. Structure : 
 3 à 8 puces très courtes : ce que cette séance ajoute, corrige ou contredit par rapport à l'état actuel de la campagne.
 
 === CHRONOLOGIE ===
-UNIQUEMENT le texte de la séance du {date}, qui sera ajouté à la fin de la rubrique « Chronologie » de l'état actuel. Même forme, même niveau de détail et même style de titre que les séances déjà présentes dans cette rubrique (si elle est vide : un titre « ### Séance du {date} » puis des puces). Ne recopie aucune séance antérieure.
+UNIQUEMENT le texte de la séance du {date}, qui sera ajouté à la fin de la rubrique « Chronologie » de l'état actuel. Même forme, même niveau de détail et même style de titre que les séances déjà présentes dans cette rubrique (si elle est vide : un titre « ### Séance du {date} » puis des puces). Ne recopie aucune séance antérieure. Les blocs « Chapitre » et « Livre » de cette rubrique sont des condensés de plusieurs séances : n'imite pas leur forme, seulement celle des blocs « Séance du ».
 
 === SECTIONS ===
 Seulement les rubriques de l'état actuel dont le contenu DOIT changer (situation des personnages, alliés / adversaires / PNJ, lieux, fils ouverts, réserves…), jamais « Chronologie » ni « Changements ». Pour chacune : une ligne `--- SECTION: titre exact de la rubrique ---`, puis son contenu COMPLET et à jour, sans la ligne de titre. Une rubrique qui ne change pas n'apparaît pas. Supprime les fils résolus, ajoute les nouveaux ; si la séance contredit l'état actuel, ne tranche pas : note la contradiction dans « Réserves ». Rubriques de l'état actuel : {rubriques}. Même règle de secret : ce document est lu par tous les joueurs. {structure}
 
 === PRECEDEMMENT ===
 Le « Dans l'épisode précédent… » lu à voix haute au début de la prochaine séance. Il raconte UNIQUEMENT la séance du {date} : les séances antérieures ne servent qu'à comprendre (une demi-phrase au plus, si c'est indispensable). Ton de récap de série, vivant mais sobre, sans plaisanterie forcée, sans exagération. N'invente rien : tout doit figurer dans le compte rendu. {mots}, 2 paragraphes courts, puis une phrase d'accroche sur les enjeux immédiats. Commence par « Dans l'épisode précédent de {campagne}… ». Respecte les secrets."""
+
+TACHE_QUESTIONS = """=== QUESTIONS ===
+Après les documents, pose au maximum {max} questions aux joueurs (aucune si rien n'est vraiment ambigu). Elles portent UNIQUEMENT sur des ambiguïtés de scénario ou des non-dits qui changent le sens du récit : un personnage vu dans deux scènes est-il le même ? qui a pris telle décision ? tel événement est-il réel ou une illusion ? Elles ne portent JAMAIS sur la qualité de la transcription (noms mal reconnus, passages inaudibles), ni sur ce qui figure déjà dans le contexte ou l'état de la campagne. Dans les documents ci-dessus, garde l'ambiguïté telle quelle (dans « Réserves ») : on les corrigera avec les réponses. Format, une question après l'autre :
+--- QUESTION 1 ---
+Question: la question, claire et courte, compréhensible sans avoir lu la transcription
+Pourquoi: ce qui change dans le compte rendu selon la réponse
+Repères: [hh:mm:ss] [hh:mm:ss] (les moments de la transcription concernés, 1 à 4)
+Choix: réponse possible A | réponse possible B | réponse possible C (2 à 4 choix courts ; les joueurs pourront aussi répondre librement)"""
 
 FORMAT_REPONSE = """FORMAT DE RÉPONSE : commence par la ligne exacte `=== FIN LUE === hh:mm:ss | « texte »`, où hh:mm:ss est l'horodatage de la TOUTE DERNIÈRE réplique que tu as réellement lue dans cette partie et « texte » cette réplique recopiée MOT POUR MOT (ne devine rien : si le texte te semble coupé, donne la dernière réplique que tu as vraiment lue). Puis la ligne `=== NOTES ===` suivie des notes.{suite}"""
 
@@ -51,16 +61,21 @@ def _tag(name: str, body: str) -> str:
     return f"<{name}>\n{body.strip()}\n</{name}>"
 
 
-def build_packs(campaign: Campaign, rows: list, session_id: str, part_minutes: int | None = None) -> dict:
-    """Écrit les packs dans seances/<session>/pack/ et pack.json. -> {'fichiers': [Path], 'parties': [{...}]}."""
-    cleaned = clean_rows(rows, labeler(campaign.joueurs()), SET["campagnes.pack_fusion_s"])       # pack allégé
+def build_packs(campaign: Campaign, rows: list, session_id: str, part_minutes: int | None = None, cleaned: list | None = None,
+                questions_max: int = 0, pack_dir: str = "pack") -> dict:
+    """Écrit les packs dans seances/<session>/pack/ et pack.json. -> {'fichiers': [Path], 'parties': [{...}]}.
+
+    `cleaned` : répliques déjà nettoyées (étape de nettoyage), `rows` est alors ignoré. `questions_max` > 0 : le modèle ajoute
+    une section `=== QUESTIONS ===`. `pack_dir` : sous-dossier de la séance (l'analyse automatique n'écrase pas le pack manuel)."""
+    if cleaned is None:
+        cleaned = clean_rows(rows, labeler(campaign.joueurs()), SET["campagnes.pack_fusion_s"])       # pack allégé
     if not cleaned:
         raise CampaignError("Aucune parole exploitable dans cette séance.")
-    minutes = SET["campagnes.pack_minutes"] if part_minutes is None else part_minutes
+    minutes = part_minutes or 0
     parts = windows(cleaned, minutes) if minutes > 0 else [cleaned]          # 0 : un seul pack
     n, date = len(parts), session_date(session_id)
-    contexte, etat = contexte_text(campaign), etat_text(campaign)
-    out_dir = campaign.path / "seances" / session_id / "pack"
+    contexte, etat = contexte_text(campaign, session_id), etat_text(campaign)
+    out_dir = campaign.path / "seances" / session_id / pack_dir
     out_dir.mkdir(parents=True, exist_ok=True)
     for old in out_dir.glob("pack_*.md"):
         old.unlink()
@@ -75,12 +90,17 @@ def build_packs(campaign: Campaign, rows: list, session_id: str, part_minutes: i
         if n > 1 and not first:
             blocks.append("Cette partie fait suite aux précédentes, envoyées dans CETTE MÊME conversation : garde leurs notes en mémoire.")
         blocks += [header, _tag("transcription", render_lines(part)), TACHE_NOTES]
+        blocks.append(RETENIR_NOTES)
         suite = ""
         if last:
             rubriques = ", ".join(f"« {t} »" for t in fusion.titles(etat)) or "(aucune : l'état est vide ou en texte libre)"
             blocks.append(TACHE_LIVRABLES.format(mots=longueur_precedemment(), date=date, campagne=campaign.titre,
                                                  rubriques=rubriques, structure=STRUCTURE_ETAT))
+            blocks.append(RETENIR_FINAL)
             suite = " Puis, après les notes, les documents décrits plus haut, chacun introduit par sa ligne exacte : `=== COMPTE RENDU ===`, `=== CHANGEMENTS ===`, `=== CHRONOLOGIE ===`, `=== SECTIONS ===` puis `=== PRECEDEMMENT ===`."
+            if questions_max > 0:
+                blocks.insert(len(blocks) - 0, TACHE_QUESTIONS.format(max=questions_max))
+                suite += " Termine par `=== QUESTIONS ===`."
         blocks.append(FORMAT_REPONSE.format(suite=suite))
         name = f"pack_{session_id}.md" if n == 1 else f"pack_{session_id}_partie_{i}_sur_{n}.md"
         (out_dir / name).write_text("\n\n".join(b for b in blocks if b) + "\n", encoding="utf-8")
@@ -108,7 +128,7 @@ def parse_reponse(text: str) -> dict:
 
     Deux formats : le nouveau (`CHRONOLOGIE`, `SECTIONS`, `CHANGEMENTS` : seulement ce qui change) et l'ancien
     (`RESUME GLOBAL` : document complet), toujours accepté. Lève CampaignError si incomplet."""
-    names = ["FIN LUE", "NOTES", "COMPTE RENDU", "CHANGEMENTS", "CHRONOLOGIE", "SECTIONS", "RESUME GLOBAL", "PRECEDEMMENT"]
+    names = ["FIN LUE", "NOTES", "COMPTE RENDU", "CHANGEMENTS", "CHRONOLOGIE", "SECTIONS", "RESUME GLOBAL", "PRECEDEMMENT", "QUESTIONS"]
     text = text.replace("\r\n", "\n")
     out = {"notes": _section(text, "NOTES", names) or ""}
     for key, name in (("compte_rendu", "COMPTE RENDU"), ("resume_global", "RESUME GLOBAL"), ("precedemment", "PRECEDEMMENT")):
@@ -135,6 +155,7 @@ def parse_reponse(text: str) -> dict:
             out["fin_lue_s"] = int(m.group(1)) * 3600 + int(m.group(2)) * 60 + int(m.group(3))
             out["fin_lue_texte"] = re.sub(r"^[\s|:\-–—«»\"“”*]+|[\s«»\"“”*]+$", "", line.group(1)[m.end():])
     stamps = [int(h) * 3600 + int(mi) * 60 + int(sec) for h, mi, sec in re.findall(r"\[(\d+):(\d\d):(\d\d)\]", out["notes"])]
+    out["questions"] = _section(text, "QUESTIONS", names) or ""
     out["notes_fin_s"] = max(stamps) if stamps else None
     return out
 
@@ -182,24 +203,25 @@ def trop_long(precedemment: str) -> str | None:
 
 
 def integrate(campaign: Campaign, answer: str, session_id: str | None = None, source: str = "pack",
-              extra: dict | None = None) -> dict:
+              extra: dict | None = None, controle: bool = True, extractions: str | None = None, avertissements: list | None = None) -> dict:
     """Range la réponse : compte rendu, « précédemment », nouvelle version du résumé global.
 
     Nouveau format : le résumé global est la version actuelle + le paragraphe de chronologie + les rubriques modifiées
     (rien d'autre n'est réécrit). Ancien format : le document complet fourni remplace le résumé.
-    `source`/`extra` : traces écrites dans meta.json. -> {'version', 'seance', 'avertissement' (str ou None), ...}."""
+    `source`/`extra` : traces écrites dans meta.json. `controle=False` : pas de contrôle de lecture (réponse sans `FIN LUE`, déjà
+    vérifié à l'étape précédente) ; `extractions` : notes à conserver dans extractions.md ; `avertissements` : avertissements déjà collectés. -> {'version', 'seance', 'avertissement' (str ou None), ...}."""
     session_id = session_id or pending_session(campaign)
     if not session_id:
-        raise CampaignError("Aucune séance en attente : génère d'abord un pack avec `/campagne pack`.")
+        raise CampaignError("Aucune séance en attente : lance `/campagne resumer`.")
     seance = campaign.path / "seances" / session_id
     if (seance / "meta.json").exists():
         raise CampaignError(f"La séance {session_id} est déjà intégrée : fais d'abord `/campagne rollback` si elle est la dernière.")
     data = parse_reponse(answer)
     try:
-        expected = json.loads((seance / "pack" / "pack.json").read_text(encoding="utf-8"))["parties"][-1]
+        expected = json.loads((seance / "pack" / "pack.json").read_text(encoding="utf-8"))["parties"][-1] if controle else None
     except (OSError, ValueError, KeyError, IndexError):
         expected = None
-    warns = controle_lecture(data, expected)
+    warns = list(avertissements or []) + controle_lecture(data, expected)
     redo = ("Fais `/campagne rollback` puis relance `/campagne resumer`" if source == "claude"
             else "Relance la dernière partie, puis `/campagne rollback`")
     warning = ("\n".join(warns) + f"\n{redo} avant de te fier à cette version.") if warns else ""
@@ -215,7 +237,7 @@ def integrate(campaign: Campaign, answer: str, session_id: str | None = None, so
     warning = "\n".join(x for x in [warning, *notes] if x) or None
     seance.mkdir(parents=True, exist_ok=True)
     (seance / "reponse.md").write_text(answer.rstrip() + "\n", encoding="utf-8")
-    (seance / "extractions.md").write_text(data["notes"] + "\n", encoding="utf-8")
+    (seance / "extractions.md").write_text((extractions if extractions is not None else data["notes"]) + "\n", encoding="utf-8")
     (seance / "compte_rendu.md").write_text(data["compte_rendu"] + "\n", encoding="utf-8")
     (seance / "precedemment.md").write_text(data["precedemment"] + "\n", encoding="utf-8")
     version = add_version(campaign, resume, session_id)

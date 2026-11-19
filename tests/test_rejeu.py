@@ -68,7 +68,8 @@ def test_variantes_personnalisees():
     with pytest.raises(ValueError, match="réglage inconnu"):
         rejeu.parse_variant("x=bidon:1", base)
     names = list(rejeu.presets(base))
-    assert names == ["actuel", "reglages", "filtre", "fusion", "contexte"]
+    assert names == ["actuel", "reglages", "filtre", "fusion", "contexte", "gain", "passehaut", "bruit", "sansalign",
+                     "redecoupe", "combine"]
     assert rejeu.presets(base)["contexte"].fusion_s == 1.2 and rejeu.presets(base)["contexte"].contexte
 
 
@@ -192,3 +193,191 @@ def test_nouveaux_reglages_par_defaut():
     assert {"merci", "au revoir", "bye", "amen"} <= {x.strip() for x in p.mots_seuls_ignores.split(",")}
     assert rejeu.rejection("Au revoir.", 2.0, p) == "mot isolé ignoré"
     assert rejeu.rejection("Au revoir à tous !", 2.0, p) is None
+
+
+# --- traitement de l'audio, sans alignement, redécoupage ------------------------------------------------
+
+def tone(seconds, amp, hz=300):
+    t = np.arange(int(seconds * RATE)) / RATE
+    return (amp * np.sin(2 * np.pi * hz * t)).astype("<i2")
+
+
+def level_flags(pcm, floor=100):
+    return [bool(abs(pcm[i * F:(i + 1) * F]).max() > floor) for i in range(len(pcm) // F)]
+
+
+def test_gain_par_joueur_vise_le_niveau_demande():
+    pcm = np.concatenate([np.zeros(RATE, "<i2"), tone(3, 500), np.zeros(RATE, "<i2")])
+    level = rejeu.speech_level_dbfs(pcm, level_flags(pcm))
+    assert level == pytest.approx(20 * np.log10(500 / 32768 / np.sqrt(2)), abs=0.3)
+    out, clipped = rejeu.apply_gain(pcm, 10)
+    assert clipped == 0 and int(out.max()) == pytest.approx(500 * 10 ** 0.5, abs=3)
+    assert rejeu.speech_level_dbfs(np.zeros(RATE, "<i2"), [False] * 50) is None             # aucune parole : pas de niveau
+    loud, clipped = rejeu.apply_gain(tone(1, 20000), 12)                                    # écrêtage compté, jamais d'overflow
+    assert clipped > 0 and int(loud.max()) == 32767
+
+
+def test_prepare_audio_gain_plafonne_et_note_le_silence(monkeypatch):
+    monkeypatch.setattr(rejeu, "voiced_flags", lambda pcm, agg: level_flags(pcm, 10))
+    quiet = np.concatenate([np.zeros(RATE, "<i2"), tone(3, 30), np.zeros(RATE, "<i2")])      # ≈ -63 dBFS : il faudrait +43 dB
+    out, info = rejeu.prepare_audio(quiet, replace(OLD, gain_cible_dbfs=-20.0))
+    assert info["gain_db"] == rejeu.GAIN_MAX_DB and info["niveau_parole_dbfs"] < -60 and int(out.max()) > int(quiet.max()) * 10
+    silent, info = rejeu.prepare_audio(np.zeros(RATE, "<i2"), replace(OLD, gain_cible_dbfs=-20.0))
+    assert "aucune parole" in info["note"] and not silent.any()
+    untouched, info = rejeu.prepare_audio(quiet, OLD)
+    assert info == {} and untouched is quiet and not rejeu.prep_active(OLD)
+
+
+def test_passe_haut_attenue_les_graves_et_garde_la_voix():
+    pcm = tone(2, 6000, 20) + tone(2, 6000, 600)
+    out = rejeu.high_pass(pcm, 80)
+
+    def energy(x, hz):
+        spec = np.abs(np.fft.rfft(x[RATE // 2:].astype(float)))
+        return spec[int(hz * (len(x) - RATE // 2) / RATE)]
+
+    assert energy(out, 20) < 0.2 * energy(pcm, 20)                  # grondement à 20 Hz fortement atténué
+    assert energy(out, 600) > 0.9 * energy(pcm, 600)                # voix à 600 Hz intacte
+    assert out.dtype == np.dtype("<i2") and len(out) == len(pcm)
+
+
+def test_debruitage_par_blocs_et_erreurs_claires(monkeypatch):
+    import sys, types
+    pcm = tone(2, 4000)
+    with pytest.raises(ValueError, match="débruitage inconnu"):
+        rejeu.denoise(pcm, "magie")
+    monkeypatch.setitem(sys.modules, "noisereduce", None)           # bibliothèque absente
+    with pytest.raises(RuntimeError, match="pip install noisereduce"):
+        rejeu.denoise(pcm, "noisereduce")
+    seen = []
+    fake = types.SimpleNamespace(reduce_noise=lambda y, sr, stationary, prop_decrease: (seen.append(len(y)), y * 0.5)[1])
+    monkeypatch.setitem(sys.modules, "noisereduce", fake)
+    out = rejeu.denoise(pcm, "noisereduce")
+    assert seen == [len(pcm)] and int(out.max()) == pytest.approx(2000, abs=2) and pcm.max() == 4000   # l'original n'est pas modifié
+    long = np.zeros(RATE * 130, "<i2")                               # 130 s : trois blocs de 60 s
+    seen.clear()
+    rejeu.denoise(long, "noisereduce")
+    assert seen == [RATE * 60, RATE * 60, RATE * 10]
+    seen.clear()
+    rejeu.denoise(long, "noisereduce", (RATE * 70, RATE * 80))        # extrait : seulement la zone + 5 s de marge
+    assert sum(seen) == RATE * 20
+    monkeypatch.setitem(sys.modules, "df", None)
+    with pytest.raises(RuntimeError, match="deepfilternet"):
+        rejeu.denoise(pcm, "deepfilter")
+
+
+class AlignEngine(FakeEngine):
+    def __init__(self):
+        super().__init__()
+        self.align_model, self.align_seen = object(), []
+
+    def transcribe(self, audio):
+        self.align_seen.append(self.align_model is not None)
+        return super().transcribe(audio)
+
+
+def test_sans_alignement_desactive_puis_restaure_le_modele(session, tmp_path):
+    engine, cache = AlignEngine(), rejeu.AsrCache(tmp_path / "c.jsonl")
+    tracks = rejeu.session_tracks(session)
+    avec = rejeu.transcribe_variant(OLD, tracks, engine, cache=cache)
+    assert set(engine.align_seen) == {True} and avec["stats_asr"]["cache"] == 0
+    engine.align_seen.clear()
+    sans = rejeu.transcribe_variant(replace(OLD, alignement=False), tracks, engine, cache=cache)
+    assert set(engine.align_seen) == {False} and engine.align_model is not None        # modèle remis en place
+    assert sans["stats_asr"]["cache"] == 0                                              # clé de cache distincte : pas de mélange
+    again = rejeu.transcribe_variant(replace(OLD, alignement=False), tracks, engine, cache=cache)
+    assert again["stats_asr"]["cache"] == len(engine.align_seen) > 0                    # mais réutilisable pour la même variante
+    assert rejeu.AsrCache.key(np.zeros(4, "<i2"), None) == rejeu.AsrCache.key(np.zeros(4, "<i2"), None, "")   # anciens caches valides
+
+
+def test_pause_la_plus_longue_dans_la_zone_centrale():
+    flags = flags_of((True, 50), (False, 8), (True, 100), (False, 20), (True, 100), (False, 6), (True, 50))
+    assert rejeu.longest_pause(flags, 0, len(flags) * F) == (50 + 8 + 100 + 10) * F          # la pause de 20 trames, en son milieu
+    assert rejeu.longest_pause(flags_of((True, 300)), 0, 300 * F) is None                  # parole continue : pas de coupe
+    assert rejeu.longest_pause(flags_of((True, 5)), 0, 5 * F) is None                      # énoncé trop court
+    edge = flags_of((False, 30), (True, 200), (False, 30))                                  # pauses hors zone centrale : ignorées
+    assert rejeu.longest_pause(edge, 0, len(edge) * F) is None
+
+
+class LongEngine:
+    """Énoncé long : un texte de 14 mots sans ponctuation ; morceaux courts : une phrase ponctuée (ou pas selon `fixe`)."""
+    align_model = None
+
+    def __init__(self, fixe=True): self.fixe, self.calls = fixe, 0
+
+    def transcribe(self, audio):
+        self.calls += 1
+        dur = len(audio) / RATE
+        text = "un deux trois quatre cinq six sept huit neuf dix onze douze treize quatorze"
+        if dur < 10 and self.fixe:
+            text = "Une phrase correcte."
+        return [{"start": 0.0, "end": dur, "text": text}]
+
+
+@pytest.fixture
+def long_session(tmp_path, monkeypatch, cfg_file):
+    d = tmp_path / "2026-11-04_200000"
+    (d / "audio").mkdir(parents=True)
+    write_wav(d / "audio" / "Bob.wav", [(1, 0), (6, 8000), (0.5, 0), (6, 8000), (1, 0)])      # 12,5 s, pause de 0,5 s < 700 ms
+    (d / "meta.json").write_text(json.dumps({"participants": [{"id": "2", "name": "Bob", "file": "Bob.wav"}]}), encoding="utf-8")
+    monkeypatch.setattr(rejeu, "voiced_flags", lambda pcm, agg: level_flags(pcm, 1000))
+    return d
+
+
+def test_redecoupe_les_enonces_longs_sans_ponctuation(long_session):
+    tracks = rejeu.session_tracks(long_session)
+    sans = rejeu.transcribe_variant(OLD, tracks, LongEngine())
+    assert len(sans["rows"]) == 1 and sans["redecoupes"] == []
+    assert rejeu.metrics(sans["rows"])["lignes de 12 mots ou plus sans ponctuation finale"] == 1
+    engine = LongEngine()
+    avec = rejeu.transcribe_variant(replace(OLD, redecoupe_s=10.0), tracks, engine)
+    assert [r["text"] for r in avec["rows"]] == ["Une phrase correcte."] * 2 and engine.calls == 3
+    assert len(avec["redecoupes"]) == 1 and avec["redecoupes"][0]["name"] == "Bob" and "quatorze" in avec["redecoupes"][0]["avant"]
+    assert rejeu.metrics(avec["rows"])["lignes de 12 mots ou plus sans ponctuation finale"] == 0
+    # les deux morceaux sont contigus et couvrent l'énoncé initial
+    first, second = avec["rows"]
+    assert first["start"] < 2 and second["end"] > 12 and first["end"] <= second["start"] + 0.01
+    assert replace(OLD, redecoupe_s=10.0).redecoupe_s == 10.0 and "redecoupes" in avec
+
+
+def test_redecoupe_abandonne_si_ca_n_ameliore_rien(long_session):
+    engine = LongEngine(fixe=False)                                   # même texte fautif partout : couper ne sert à rien
+    res = rejeu.transcribe_variant(replace(OLD, redecoupe_s=10.0), rejeu.session_tracks(long_session), engine)
+    assert res["redecoupes"] == [] and len(res["rows"]) == 1
+    seuil = rejeu.transcribe_variant(replace(OLD, redecoupe_s=30.0), rejeu.session_tracks(long_session), LongEngine())
+    assert seuil["redecoupes"] == [] and len(seuil["rows"]) == 1      # énoncé plus court que le seuil : intact
+
+
+def test_rapport_affiche_gains_et_redecoupes(session, monkeypatch):
+    monkeypatch.setattr(rejeu, "voiced_flags", lambda pcm, agg: level_flags(pcm, 1000))
+    tracks = rejeu.session_tracks(session)
+    gain = rejeu.transcribe_variant(replace(OLD, gain_cible_dbfs=-20.0), tracks, FakeEngine())
+    assert gain["prep"]["Anna"]["gain_db"] == pytest.approx(-20 + 12.25, abs=0.2)         # signal constant de 8000 = -12,25 dBFS : -7,75 dB
+    text = rejeu.report({"actuel": rejeu.transcribe_variant(OLD, tracks, FakeEngine()), "gain": gain})
+    assert "énoncés redécoupés" in text and "Traitement de l'audio par joueur" in text and "dBFS" in text
+    assert "lignes de 12 mots ou plus sans ponctuation finale" in text
+
+
+def test_script_variantes_audio_bibliotheque_absente_ignoree_et_redecoupes_ecrits(long_session, monkeypatch, capsys):
+    import sys, pathlib
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "tools"))
+    import comparer_transcription as cli
+    monkeypatch.setitem(sys.modules, "noisereduce", None)
+    assert cli.main([str(long_session), "--variantes", "actuel,bruit,redecoupe,gain"], engine=LongEngine()) == 0
+    out = capsys.readouterr().out
+    assert "variante « bruit » ignorée" in out and "pip install noisereduce" in out and "gain" in out
+    d = long_session / "comparaison"
+    report = (d / "rapport.md").read_text(encoding="utf-8")
+    assert "| Indicateur | actuel | redecoupe | gain |" in report and "bruit" not in report.splitlines()[2]
+    assert "AVANT" in (d / "redecoupes.txt").read_text(encoding="utf-8")
+    assert not (d / "transcript_bruit.txt").exists()
+    monkeypatch.setitem(sys.modules, "noisereduce", None)
+    assert cli.main([str(long_session), "--variantes", "bruit"], engine=LongEngine()) == 1             # plus rien à comparer
+
+
+def test_variantes_par_defaut_de_l_outil():
+    import sys, pathlib
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "tools"))
+    import comparer_transcription as cli
+    assert set(rejeu.presets(rejeu.from_config())) >= {"actuel", "gain", "passehaut", "redecoupe", "sansalign", "combine"}
+    assert "Par défaut : actuel,gain,passehaut,redecoupe,sansalign,combine" in cli.__doc__

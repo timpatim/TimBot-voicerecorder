@@ -14,6 +14,7 @@ import statistics
 import time
 import wave
 from collections import deque
+from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
@@ -49,6 +50,14 @@ class Params:
     contexte: bool = False             # passe la fin de la phrase précédente du joueur comme contexte à Whisper
     contexte_max_s: float = 15.0       # ... si elle date de moins de N secondes
     contexte_car: int = 200            # ... et au plus N caractères
+    # --- traitement de l'audio avant le découpage (inactif par défaut) ---
+    gain_cible_dbfs: float = 0.0       # gain fixe par joueur : amène le niveau de sa parole à N dBFS (ex. -20) ; 0 = aucun
+    passe_haut_hz: float = 0.0         # filtre passe-haut (ex. 80 Hz : retire les grondements) ; 0 = aucun
+    debruitage: str = ""               # « noisereduce » ou « deepfilter » (bibliothèques à installer) ; vide = aucun
+    # --- transcription ---
+    alignement: bool = True            # False : sans l'alignement mot à mot de WhisperX (timestamps de segment bruts)
+    redecoupe_s: float = 0.0           # énoncé d'au moins N s dont le texte est long et sans ponctuation finale : coupé à sa
+                                       # plus longue pause et retranscrit en deux morceaux (gardé seulement si ça améliore) ; 0 = non
 
 
 def from_config(nom: str = "actuel") -> Params:
@@ -61,14 +70,20 @@ def from_config(nom: str = "actuel") -> Params:
 
 
 def presets(base: Params) -> dict:
-    """Variantes proposées, de la plus simple à la plus complète (chacune ajoute à la précédente)."""
+    """Variantes proposées. reglages -> contexte s'ajoutent les unes aux autres ; les suivantes partent toutes de « actuel »."""
     reglages = replace(base, nom="reglages", silence_fin_ms=1100, min_trames_voisees=22,
                        mots_seuls_ignores=base.mots_seuls_ignores + ", au revoir, bye, amen")
     filtre = replace(base, nom="filtre", silence_fin_ms=1100, min_trames_voisees=22, filtre_duree_s=0.6,
                      mots_seuls_ignores="merci")
     fusion = replace(filtre, nom="fusion", fusion_s=1.2)
     contexte = replace(fusion, nom="contexte", contexte=True)
-    return {p.nom: p for p in (base, reglages, filtre, fusion, contexte)}
+    gain = replace(base, nom="gain", gain_cible_dbfs=-20.0)
+    passehaut = replace(base, nom="passehaut", passe_haut_hz=80.0)
+    bruit = replace(base, nom="bruit", debruitage="noisereduce")
+    sansalign = replace(base, nom="sansalign", alignement=False)
+    redecoupe = replace(base, nom="redecoupe", redecoupe_s=10.0)
+    combine = replace(base, nom="combine", gain_cible_dbfs=-20.0, passe_haut_hz=80.0, redecoupe_s=10.0)
+    return {p.nom: p for p in (base, reglages, filtre, fusion, contexte, gain, passehaut, bruit, sansalign, redecoupe, combine)}
 
 
 def parse_variant(spec: str, base: Params) -> Params:
@@ -244,6 +259,164 @@ def rejection(text: str, utt_duration: float, params: Params) -> str | None:
     return None
 
 
+# --- traitement de l'audio ------------------------------------------------------------------------
+
+GAIN_MIN_DB, GAIN_MAX_DB = -12.0, 24.0          # le gain par joueur reste dans cette plage
+BLOC_S = 60                                     # le filtrage et le débruitage travaillent par blocs de 60 s (mémoire)
+_DF = None                                      # modèle DeepFilterNet, chargé une seule fois
+
+
+def _to_int16(x: np.ndarray) -> np.ndarray:
+    return np.clip(np.rint(x), -32768, 32767).astype("<i2")
+
+
+def frame_power(pcm: np.ndarray, n: int) -> np.ndarray:
+    """Puissance moyenne (carré de l'amplitude) de chacune des n premières trames de 20 ms."""
+    out = np.empty(n)
+    step = 20000
+    for i in range(0, n, step):
+        j = min(n, i + step)
+        block = pcm[i * FRAME:j * FRAME].astype(np.float32).reshape(j - i, FRAME)
+        out[i:j] = np.mean(block * block, axis=1)
+    return out
+
+
+def speech_level_dbfs(pcm: np.ndarray, flags: list) -> float | None:
+    """Niveau RMS (dBFS) des trames où il y a de la voix ; None s'il n'y en a aucune."""
+    n = min(len(flags), len(pcm) // FRAME)
+    voiced = np.asarray(flags[:n], dtype=bool)
+    if n == 0 or not voiced.any():
+        return None
+    power = float(frame_power(pcm, n)[voiced].mean())
+    return None if power <= 0 else 10 * float(np.log10(power / 32768.0 ** 2))
+
+
+def apply_gain(pcm: np.ndarray, gain_db: float) -> tuple:
+    """-> (audio amplifié, nombre d'échantillons écrêtés)."""
+    factor, out, clipped = 10 ** (gain_db / 20), np.empty(len(pcm), dtype="<i2"), 0
+    step = RATE * BLOC_S
+    for i in range(0, len(pcm), step):
+        y = pcm[i:i + step].astype(np.float32) * factor
+        clipped += int(np.count_nonzero(np.abs(y) > 32767))
+        out[i:i + step] = _to_int16(y)
+    return out, clipped
+
+
+def high_pass(pcm: np.ndarray, hz: float) -> np.ndarray:
+    """Filtre passe-haut de Butterworth d'ordre 2 (retire les grondements sans toucher à la voix)."""
+    try:
+        from scipy.signal import butter, sosfilt
+    except ImportError as e:
+        raise RuntimeError("le filtre passe-haut demande scipy (`pip install scipy`)") from e
+    sos = butter(2, hz, btype="highpass", fs=RATE, output="sos")
+    out, zi, step = np.empty(len(pcm), dtype="<i2"), np.zeros((sos.shape[0], 2)), RATE * BLOC_S
+    for i in range(0, len(pcm), step):
+        y, zi = sosfilt(sos, pcm[i:i + step].astype(np.float64), zi=zi)
+        out[i:i + step] = _to_int16(y)
+    return out
+
+
+def denoise(pcm: np.ndarray, method: str, region: tuple | None = None) -> np.ndarray:
+    """Réduction de bruit. `region` (début, fin) en échantillons : seule cette zone (plus 5 s de marge) est traitée."""
+    if method not in ("noisereduce", "deepfilter"):
+        raise ValueError(f"débruitage inconnu « {method} » (valeurs : noisereduce, deepfilter)")
+    lo, hi = 0, len(pcm)
+    if region:
+        lo = max(0, region[0] - 5 * RATE)
+        hi = len(pcm) if region[1] is None else min(len(pcm), region[1] + 5 * RATE)
+    out, step = pcm.copy(), RATE * BLOC_S
+    if method == "noisereduce":
+        try:
+            import noisereduce as nr
+        except ImportError as e:
+            raise RuntimeError("le débruitage « noisereduce » demande `pip install noisereduce`") from e
+        for i in range(lo, hi, step):
+            x = pcm[i:min(hi, i + step)].astype(np.float32) / 32768.0
+            out[i:i + len(x)] = _to_int16(nr.reduce_noise(y=x, sr=RATE, stationary=True, prop_decrease=0.8) * 32768.0)
+        return out
+    global _DF
+    try:
+        import torch
+        from df.enhance import enhance, init_df
+        from scipy.signal import resample_poly
+    except ImportError as e:
+        raise RuntimeError("le débruitage « deepfilter » demande `pip install deepfilternet` (et scipy)") from e
+    if _DF is None:
+        _DF = init_df()
+    model, df_state, _ = _DF
+    sr = df_state.sr()
+    for i in range(lo, hi, step):
+        x = pcm[i:min(hi, i + step)].astype(np.float32) / 32768.0
+        y = enhance(model, df_state, torch.from_numpy(resample_poly(x, sr, RATE).astype(np.float32)).unsqueeze(0))
+        y = resample_poly(y.squeeze(0).numpy(), RATE, sr)[:len(x)] * 32768.0
+        out[i:i + len(y)] = _to_int16(y)
+    return out
+
+
+def prep_active(params: Params) -> bool:
+    return bool(params.gain_cible_dbfs or params.passe_haut_hz or params.debruitage)
+
+
+def prepare_audio(pcm: np.ndarray, params: Params, region: tuple | None = None) -> tuple:
+    """Passe-haut, débruitage puis gain par joueur (dans cet ordre : le niveau est mesuré sur l'audio déjà nettoyé).
+    -> (audio traité, informations : niveau de parole, gain appliqué, échantillons écrêtés)."""
+    info, out = {}, pcm
+    if params.passe_haut_hz > 0:
+        out = high_pass(out, params.passe_haut_hz)
+    if params.debruitage:
+        out = denoise(out, params.debruitage, region)
+    if params.gain_cible_dbfs:
+        level = speech_level_dbfs(out, voiced_flags(out, params.agressivite))
+        if level is None:
+            info["note"] = "aucune parole détectée : pas de gain"
+        else:
+            gain = min(max(params.gain_cible_dbfs - level, GAIN_MIN_DB), GAIN_MAX_DB)
+            out, clipped = apply_gain(out, gain)
+            info.update(niveau_parole_dbfs=round(level, 1), gain_db=round(gain, 1),
+                        ecretes_pct=round(100 * clipped / max(1, len(out)), 3))
+    return out, info
+
+
+@contextmanager
+def alignment(engine, enabled: bool):
+    """Désactive temporairement l'alignement mot à mot de WhisperX (`engine.align_model`)."""
+    if enabled or engine is None or getattr(engine, "align_model", None) is None:
+        yield
+        return
+    saved, engine.align_model = engine.align_model, None
+    try:
+        yield
+    finally:
+        engine.align_model = saved
+
+
+SUSPECT_MOTS = 12                       # une ligne d'au moins 12 mots sans ponctuation finale est suspecte (texte souvent faux)
+RE_FIN_PHRASE = re.compile(r"[.!?…\"»)]$")
+
+
+def suspect_count(segs: list) -> int:
+    return sum(1 for s in segs if len(re.findall(r"[\w'’]+", s.get("text", ""))) >= SUSPECT_MOTS
+               and not RE_FIN_PHRASE.search(s.get("text", "").strip()))
+
+
+def longest_pause(flags: list, start: int, end: int) -> int | None:
+    """Échantillon (milieu) de la plus longue pause d'au moins 100 ms dans le tiers central d'un énoncé, sinon None."""
+    f0, f1 = start // FRAME, min(end // FRAME, len(flags))
+    if f1 - f0 < 10:
+        return None
+    lo, hi = f0 + int(0.2 * (f1 - f0)), f0 + int(0.8 * (f1 - f0))
+    best, best_len, run_start = None, 0, None
+    for i in range(lo, hi + 1):
+        quiet = i < hi and not flags[i]
+        if quiet and run_start is None:
+            run_start = i
+        elif not quiet and run_start is not None:
+            if i - run_start > best_len:
+                best_len, best = i - run_start, run_start + (i - run_start) // 2
+            run_start = None
+    return best * FRAME if best is not None and best_len >= 5 else None
+
+
 # --- transcription --------------------------------------------------------------------------------
 
 def set_prompt(engine, prompt: str | None) -> bool:
@@ -282,8 +455,9 @@ class AsrCache:
                     continue
 
     @staticmethod
-    def key(audio: np.ndarray, prompt: str | None) -> str:
-        return hashlib.sha1(audio.tobytes() + (prompt or "").encode("utf-8")).hexdigest()
+    def key(audio: np.ndarray, prompt: str | None, tag: str = "") -> str:
+        """`tag` distingue les réglages de Whisper qui changent le résultat sans changer l'audio (ex. sans alignement)."""
+        return hashlib.sha1(audio.tobytes() + (prompt or "").encode("utf-8") + tag.encode("utf-8")).hexdigest()
 
     def get(self, k):
         return self.data.get(k)
@@ -297,29 +471,72 @@ class AsrCache:
 
 def transcribe_variant(params: Params, tracks: list, engine, window: tuple | None = None, cache: AsrCache | None = None,
                        progress=None, flags_cache: dict | None = None, pcm_cache: dict | None = None) -> dict:
-    """Rejoue `tracks` [(id, nom, wav)] avec `params`. -> {'rows', 'rejetes', 'avant_whisper', 'stats_asr'}.
+    """Rejoue `tracks` [(id, nom, wav)] avec `params`.
+    -> {'rows', 'rejetes', 'avant_whisper', 'enonces', 'redecoupes', 'prep', 'stats_asr'}.
 
     `window` : (début_s, fin_s) pour ne traiter qu'un extrait. `engine=None` : découpage seul (pas de Whisper)."""
     say = progress or (lambda _t: None)
-    rows, rejected_rows, before, asr_s, audio_s, hits = [], [], {}, 0.0, 0.0, 0
-    ctx_ok = True
+    rows, rejected_rows, before, cuts, prep_info = [], [], {}, [], {}
+    acc = {"asr_s": 0.0, "audio_s": 0.0, "hits": 0, "ctx_ok": True}
     if engine is not None:
         set_prompt(engine, None)                        # repart sans contexte hérité d'une variante précédente
     lo, hi = (int(window[0] * RATE), int(window[1] * RATE)) if window else (0, None)
+    tag = "" if params.alignement else "sans-alignement"
+
+    def decode(pcm, u, prompt) -> list:
+        audio = pcm[u.start:u.end].astype(np.float32) / 32768.0
+        ck = AsrCache.key(audio, prompt, tag)
+        segs = cache.get(ck) if cache else None
+        if segs is None:
+            if params.contexte:
+                acc["ctx_ok"] = set_prompt(engine, prompt) and acc["ctx_ok"]
+            t = time.monotonic()
+            with alignment(engine, params.alignement):
+                segs = [{"start": float(s.get("start", 0.0)), "end": float(s.get("end", u.duree)), "text": s.get("text", "")}
+                        for s in (engine.transcribe(audio) or [])]
+            acc["asr_s"] += time.monotonic() - t
+            if cache:
+                cache.put(ck, segs)
+        else:
+            acc["hits"] += 1
+        acc["audio_s"] += u.duree
+        return segs
+
+    def run(pcm, flags, u, prompt, depth=0) -> list:
+        """-> [(énoncé, segments)] : l'énoncé tel quel, ou ses morceaux s'il a été redécoupé avec profit."""
+        segs = decode(pcm, u, prompt)
+        if params.redecoupe_s > 0 and depth < 2 and u.duree >= params.redecoupe_s and suspect_count(segs):
+            mid = longest_pause(flags, u.start, u.end)
+            if mid is not None and mid - u.start >= RATE and u.end - mid >= RATE:
+                parts = run(pcm, flags, replace(u, end=mid), prompt, depth + 1) + \
+                    run(pcm, flags, replace(u, start=mid), prompt, depth + 1)
+                if sum(suspect_count(sg) for _p, sg in parts) < suspect_count(segs):
+                    cuts.append({"name": u.nom, "start": round(u.start / RATE, 1), "duree": round(u.duree, 1),
+                                 "avant": " ".join(x["text"].strip() for x in segs),
+                                 "apres": " | ".join(" ".join(x["text"].strip() for x in sg) for _p, sg in parts)})
+                    return parts
+        return [(u, segs)]
+
     utt_count = 0
     for uid, nom, wav in tracks:
-        pcm = (pcm_cache or {}).get(wav) if pcm_cache is not None else None
-        if pcm is None:
-            pcm = read_wav(wav)
+        raw = (pcm_cache or {}).get(wav) if pcm_cache is not None else None
+        if raw is None:
+            raw = read_wav(wav)
             if pcm_cache is not None:
                 pcm_cache.clear()                       # un seul WAV en mémoire à la fois
-                pcm_cache[wav] = pcm
-        fk = (wav, params.agressivite)
-        flags = flags_cache.get(fk) if flags_cache is not None else None
-        if flags is None:
+                pcm_cache[wav] = raw
+        if prep_active(params):
+            say(f"{nom} : traitement de l'audio")
+            pcm, prep_info[nom] = prepare_audio(raw, params, (lo, hi))
             flags = voiced_flags(pcm, params.agressivite)
-            if flags_cache is not None:
-                flags_cache[fk] = flags
+        else:
+            pcm = raw
+            fk = (wav, params.agressivite)
+            flags = flags_cache.get(fk) if flags_cache is not None else None
+            if flags is None:
+                flags = voiced_flags(pcm, params.agressivite)
+                if flags_cache is not None:
+                    flags_cache[fk] = flags
         utts, rej = build_utterances(pcm, uid, nom, params, flags)
         for k, v in rej.items():
             before[k] = before.get(k, 0) + v
@@ -330,43 +547,31 @@ def transcribe_variant(params: Params, tracks: list, engine, window: tuple | Non
             continue
         last_text, last_end = "", -1e9
         for i, u in enumerate(utts, 1):
-            audio = pcm[u.start:u.end].astype(np.float32) / 32768.0
             prompt = None
             if params.contexte and last_text and u.start / RATE - last_end <= params.contexte_max_s:
                 prompt = last_text[-params.contexte_car:]
-            ck = AsrCache.key(audio, prompt)
-            segs = cache.get(ck) if cache else None
-            if segs is None:
-                if params.contexte:
-                    ctx_ok = set_prompt(engine, prompt) and ctx_ok
-                t = time.monotonic()
-                segs = [{"start": float(s.get("start", 0.0)), "end": float(s.get("end", u.duree)), "text": s.get("text", "")}
-                        for s in (engine.transcribe(audio) or [])]
-                asr_s += time.monotonic() - t
-                if cache:
-                    cache.put(ck, segs)
-            else:
-                hits += 1
-            audio_s += u.duree
-            for s in segs:
-                text = (s["text"] or "").strip()
-                if not text:
-                    continue
-                s0 = min(max(s["start"], 0.0), u.duree)
-                s1 = min(max(s["end"], s0), u.duree)
-                row = {"name": nom, "start": round(u.start / RATE + s0, 3), "end": round(u.start / RATE + s1, 3),
-                       "text": text, "utt_s": round(u.duree, 2)}
-                reason = rejection(text, u.duree, params)
-                if reason:
-                    rejected_rows.append({**row, "reason": reason})
-                else:
-                    rows.append(row)
-                    last_text, last_end = text, u.end / RATE
+            for piece, segs in run(pcm, flags, u, prompt):
+                for s in segs:
+                    text = (s["text"] or "").strip()
+                    if not text:
+                        continue
+                    s0 = min(max(s["start"], 0.0), piece.duree)
+                    s1 = min(max(s["end"], s0), piece.duree)
+                    row = {"name": nom, "start": round(piece.start / RATE + s0, 3), "end": round(piece.start / RATE + s1, 3),
+                           "text": text, "utt_s": round(piece.duree, 2)}
+                    reason = rejection(text, piece.duree, params)
+                    if reason:
+                        rejected_rows.append({**row, "reason": reason})
+                    else:
+                        rows.append(row)
+                        last_text, last_end = text, piece.end / RATE
             if i % 50 == 0:
                 say(f"{nom} : {i}/{len(utts)}")
     rows.sort(key=lambda r: (r["start"], r["end"]))
-    return {"rows": rows, "rejetes": rejected_rows, "avant_whisper": before, "enonces": utt_count,
-            "stats_asr": {"asr_s": asr_s, "audio_s": audio_s, "cache": hits, "contexte_applique": (ctx_ok if params.contexte else None)}}
+    return {"rows": rows, "rejetes": rejected_rows, "avant_whisper": before, "enonces": utt_count, "redecoupes": cuts,
+            "prep": prep_info,
+            "stats_asr": {"asr_s": acc["asr_s"], "audio_s": acc["audio_s"], "cache": acc["hits"],
+                          "contexte_applique": (acc["ctx_ok"] if params.contexte else None)}}
 
 
 # --- mesures --------------------------------------------------------------------------------------
@@ -394,6 +599,8 @@ def metrics(rows: list, rejected: list | None = None) -> dict:
             f"% débit > {DEBIT_MAX:.0f} mots/s": round(100 * len(fast) / n, 1),
             "« au revoir / bye / amen / merci »": len(hall),
             "% sans ponctuation finale (≥ 4 mots)": round(100 * len(cut) / n, 1),
+            f"lignes de {SUSPECT_MOTS} mots ou plus sans ponctuation finale": sum(
+                1 for r in cut if len(_words(r["text"])) >= SUSPECT_MOTS),
             "mots au total": sum(len(_words(r["text"])) for r in rows),
             "rejetées par le filtre": len(rejected or [])}
 
@@ -472,6 +679,8 @@ def report(results: dict, wers: dict | None = None) -> str:
     if wers:
         lines.append("| **WER** (% d'erreurs, ref. corrigée) | " + " | ".join(
             str(wers[n]["wer"]) + " %" if wers.get(n) and wers[n]["wer"] is not None else "—" for n in names) + " |")
+    lines.append("| énoncés redécoupés (plus longue pause) | " + " | ".join(str(len(results[n].get("redecoupes", [])))
+                                                                            for n in names) + " |")
     lines += ["", "## Écartés avant Whisper (découpage)", "", "| Raison | " + " | ".join(names) + " |", "|---|" + "---|" * len(names)]
     reasons = sorted({k for r in results.values() for k in r["avant_whisper"]})
     for k in reasons:
@@ -479,6 +688,18 @@ def report(results: dict, wers: dict | None = None) -> str:
     lines += ["", "## Temps de calcul", "", "| | " + " | ".join(names) + " |", "|---|" + "---|" * len(names)]
     lines.append("| Whisper (s) | " + " | ".join(f"{results[n]['stats_asr']['asr_s']:.0f}" for n in names) + " |")
     lines.append("| résultats réutilisés du cache | " + " | ".join(str(results[n]["stats_asr"]["cache"]) for n in names) + " |")
+    players = sorted({p for r in results.values() for p in r.get("prep", {})})
+    if players:
+        lines += ["", "## Traitement de l'audio par joueur (gain appliqué en dB · niveau de parole avant gain en dBFS)", "",
+                  "| Joueur | " + " | ".join(names) + " |", "|---|" + "---|" * len(names)]
+        for p in players:
+            cells = []
+            for n in names:
+                i = results[n].get("prep", {}).get(p)
+                cells.append("—" if not i else (f"{i['gain_db']:+.1f} dB · {i['niveau_parole_dbfs']} dBFS"
+                                                + (f" · {i['ecretes_pct']} % écrêtés" if i.get("ecretes_pct") else "")
+                                                if "gain_db" in i else i.get("note", "filtré")))
+            lines.append(f"| {p} | " + " | ".join(cells) + " |")
     ctx = [n for n in names if results[n]["stats_asr"]["contexte_applique"] is False]
     if ctx:
         lines += ["", f"⚠️ Variante(s) {', '.join(ctx)} : la version de WhisperX installée n'accepte pas de contexte "

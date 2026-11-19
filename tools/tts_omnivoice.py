@@ -14,14 +14,47 @@ Le README ne documente pas le paramètre de langue : il n'est transmis que si la
 import argparse
 import inspect
 import json
-import os
+import re
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from tts_chatterbox import split_text  # noqa: E402  (stdlib seulement)
 
 MAX_CHARS = 250                  # morceaux courts : un long morceau risque d'être coupé avant sa fin
 TAIL_S = 0.5                     # silence final : le dernier mot ne doit jamais être avalé
+
+
+def split_text(text: str, max_chars: int = MAX_CHARS) -> list:
+    """Découpe en morceaux d'au plus `max_chars` : paragraphes, puis phrases, puis virgules / mots."""
+    chunks = []
+    for para in re.split(r"\n\s*\n|\n", text.strip()):
+        para = para.strip()
+        if not para:
+            continue
+        current = ""
+        for sentence in re.split(r"(?<=[.!?…])\s+", para):
+            for piece in _hard_split(sentence, max_chars):
+                if current and len(current) + 1 + len(piece) > max_chars:
+                    chunks.append(current)
+                    current = piece
+                else:
+                    current = f"{current} {piece}".strip()
+        if current:
+            chunks.append(current)
+    return chunks
+
+
+def _hard_split(sentence: str, max_chars: int) -> list:
+    if len(sentence) <= max_chars:
+        return [sentence]
+    out, current = [], ""
+    for part in re.split(r"(?<=[,;:])\s+|\s+", sentence):
+        if current and len(current) + 1 + len(part) > max_chars:
+            out.append(current)
+            current = part
+        else:
+            current = f"{current} {part}".strip()
+    if current:
+        out.append(current)
+    return out
 WORDS_PER_S = 3.6                # débit mesuré d'OmniVoice en français à vitesse 1.0 (mots / s)
 MIN_RATIO = 0.6                  # en dessous de cette part de la durée attendue, un morceau est jugé tronqué
 RETRIES = 2

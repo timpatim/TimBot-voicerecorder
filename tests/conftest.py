@@ -90,18 +90,6 @@ def wait_until(predicate, timeout=5.0):
     return False
 
 
-@pytest.fixture
-def clipboard(monkeypatch):
-    """Presse-papiers factice de la machine du bot : `.text` contient ce que le bot a copié (ou ce qu'il doit « coller »)."""
-    import types
-    from voicebot import presse_papiers
-    box = types.SimpleNamespace(text="")
-    monkeypatch.setattr(presse_papiers, "reason_unavailable", lambda: None)
-    monkeypatch.setattr(presse_papiers, "copy", lambda text: setattr(box, "text", text))
-    monkeypatch.setattr(presse_papiers, "paste", lambda: box.text)
-    return box
-
-
 @pytest.fixture(autouse=True)
 def pas_de_vrai_claude(monkeypatch):
     """Aucun test ne doit lancer le vrai programme `claude` (abonnement, réseau) : il faut le simuler explicitement."""
@@ -130,7 +118,8 @@ def faux_claude(monkeypatch):
     faux = Faux()
     faux.calls = []
     monkeypatch.setattr(claude_cli.shutil, "which", lambda name: "/usr/bin/" + name)
-    monkeypatch.setitem(SET.values, "campagnes.moteur_resume", "claude")
+    monkeypatch.setitem(SET.values, "claude.nettoyage", False)          # mode rapide : un seul appel (le pipeline complet a ses tests)
+    monkeypatch.setitem(SET.values, "claude.questions", False)
 
     def run(argv, input=None, capture_output=None, timeout=None, cwd=None, env=None, creationflags=0):
         faux.calls.append({"argv": argv, "input": input.decode("utf-8"), "cwd": cwd, "env": env, "timeout": timeout})

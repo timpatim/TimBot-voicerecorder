@@ -244,7 +244,7 @@ def test_resumer_sans_claude_ou_pendant_un_enregistrement(camp, faux_claude, mon
     monkeypatch.setattr(claude_cli.shutil, "which", lambda name: None)
     inter2 = FakeInter()
     resumer(bot, inter2, session=SID, fichier=Att(TRANSCRIPT))
-    assert "Claude indisponible" in inter2.out[-1] and "gemini" in inter2.out[-1]
+    assert "Claude indisponible" in inter2.out[-1]
 
 
 def test_resumer_erreur_de_connexion_claude(camp, faux_claude):
@@ -252,3 +252,11 @@ def test_resumer_erreur_de_connexion_claude(camp, faux_claude):
     bot, inter = make_bot(), FakeInter()
     resumer(bot, inter, session=SID, fichier=Att(TRANSCRIPT))
     assert "❌" in inter.out[-1] and "/login" in inter.out[-1] and len(campagne.versions(camp)) == 1
+
+
+def test_consigne_a_retenir_dans_le_pack_et_le_nettoyage(camp):
+    from voicebot import analyse
+    text = pack.build_packs(camp, ROWS[:3], SID, 0)["fichiers"][0].read_text(encoding="utf-8")
+    assert "★ À RETENIR" in text and "rubrique « À retenir »" in text
+    assert text.index("=== COMPTE RENDU ===") < text.index("INFORMATIONS À RETENIR")
+    assert "demande orale de retenir" in analyse.TACHE_NETTOYAGE

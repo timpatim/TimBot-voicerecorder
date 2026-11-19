@@ -1,4 +1,4 @@
-"""Packs à coller dans un chat, contrôle de lecture et intégration de la réponse."""
+"""Pack d'une séance (prompt envoyé à Claude), contrôle de lecture et intégration de la réponse."""
 import asyncio
 import json
 import types
@@ -8,7 +8,7 @@ import pytest
 from voicebot import campagne, commands, memoire, pack
 from voicebot.config import SET
 from tests.test_campagne import FakeInter, MJ, P1, make_bot
-from tests.test_memoire import Att, fake_rec, run_memoire_step, ROWS
+from tests.test_memoire import ROWS
 
 SID = "2026-10-30_200000"
 
@@ -95,29 +95,6 @@ def test_avertissement_lecture_tronquee_ou_controle_absent(camp):
     assert "FIN LUE" in out["avertissement"]
 
 
-def test_la_fin_de_session_ne_prepare_plus_de_pack(camp, tmp_path, monkeypatch):
-    monkeypatch.setitem(SET.values, "regles.cle_api", "")
-    rec = fake_rec(tmp_path, True)
-    out, res, state = run_memoire_step(rec)
-    assert out is None and state == ("skipped", "à la demande : /campagne pack")
-    assert not (rec.dir / "pack").exists() and "pack" not in res
-
-
-def test_commandes_pack_et_integrer(camp):
-    bot, inter = make_bot(), FakeInter()
-    inter.channel_id = 1
-    cmd = bot.tree.commands["campagne"]
-    asyncio.run(cmd(inter, types.SimpleNamespace(value="pack"), session=SID, sortie=types.SimpleNamespace(value="fichier"),
-                    fichier=Att("[00:00:01.000 → 00:00:04.000] couette : Vous entrez.\n[00:00:05.000 → 00:00:07.000] silentgob : J'entre.")))
-    assert (camp.path / "seances" / SID / "pack" / "pack.json").exists()
-    inter2 = FakeInter()
-    asyncio.run(cmd(inter2, types.SimpleNamespace(value="integrer"), fichier=Att(REPONSE.replace("00:00:06", "00:00:05"))))
-    assert "intégrée" in inter2.out[0] and camp.nb_seances() == 1
-    inter3 = FakeInter()
-    asyncio.run(cmd(inter3, types.SimpleNamespace(value="integrer"), fichier=Att(REPONSE)))
-    assert "❌" in inter3.out[0]
-
-
 def test_controle_citation_et_etendue_des_notes(camp):
     pack.build_packs(camp, long_rows(), SID, part_minutes=200)           # dernière réplique : « Réplique numéro 13. » à 02:10:00
     base = "=== FIN LUE === 02:10:00 | « {} »\n=== NOTES ===\n- [02:09:00] fin\n" + REPONSE.split("=== NOTES ===\n", 1)[1].split("\n", 1)[1]
@@ -134,18 +111,7 @@ def test_controle_citation_et_etendue_des_notes(camp):
     assert "Les notes s'arrêtent à 00:40:00" in pack.controle_lecture(early, expected)[0]
 
 
-def test_session_obligatoire_avec_un_fichier_joint(camp, clipboard):
-    bot, inter = make_bot(), FakeInter()
-    cmd = bot.tree.commands["campagne"]
-    asyncio.run(cmd(inter, types.SimpleNamespace(value="pack"), fichier=Att("[00:00:01.000 → 00:00:04.000] couette : Salut.")))
-    assert "date de la séance" in inter.out[-1] and camp.nb_seances() == 0
-    asyncio.run(cmd(inter, types.SimpleNamespace(value="pack"), session="2026-10-24",
-                    fichier=Att("[00:00:01.000 → 00:00:04.000] couette : Salut.")))
-    assert (camp.path / "seances" / "2026-10-24" / "pack" / "pack.json").exists()
-
-
 def test_pas_de_decoupe_par_defaut_et_option(camp):
-    assert SET["campagnes.pack_minutes"] == 0
     made = pack.build_packs(camp, long_rows(), SID)                         # séance de 2 h 10 : un seul pack
     assert len(made["fichiers"]) == 1 and made["parties"][0]["fin_attendue"] == "02:10:00"
     assert "partie" not in made["fichiers"][0].read_text(encoding="utf-8").split("<transcription>")[0].split("</etat_campagne>")[-1]
@@ -162,7 +128,7 @@ def test_afficher_et_autocompletion_des_sessions(camp, tmp_path):
     bot = make_bot()
     cmd = bot.tree.commands["campagne"]
     inter = FakeInter()
-    choices = asyncio.run(cmd.autocompletes["session"](inter, ""))
+    choices = asyncio.run(cmd.subcommands["afficher"].autocompletes["session"](inter, ""))
     assert len(choices) == 3                                             # l'autocomplétion renvoie une proposition par séance
     labels = memoire.session_choices(camp, tmp_path / "s")
     assert labels == [("2026-10-31_190000", "2026-10-31_190000 — enregistrée, pack prêt"),
@@ -217,64 +183,5 @@ def test_rubriques_du_resume_global(camp, tmp_path):
     inter2 = FakeInter()
     asyncio.run(cmd(inter2, types.SimpleNamespace(value="afficher"), rubrique="zzz"))
     assert "introuvable" in inter2.out[-1] and "Fils ouverts" in inter2.out[-1]
-    titles = asyncio.run(cmd.autocompletes["rubrique"](FakeInter(), "lieu"))
+    titles = asyncio.run(cmd.subcommands["afficher"].autocompletes["rubrique"](FakeInter(), "lieu"))
     assert len(titles) == 1
-
-
-# --- presse-papiers --------------------------------------------------------------------------------------------
-
-def run_pack(camp, session=SID, **kw):
-    inter = FakeInter()
-    rows = "\n".join(f"[{r['start'] // 3600:02d}:{r['start'] % 3600 // 60:02d}:{r['start'] % 60:02d}.000 → "
-                     f"{r['end'] // 3600:02d}:{r['end'] % 3600 // 60:02d}:{r['end'] % 60:02d}.000] {r['user']} : {r['text']}"
-                     for r in long_rows())
-    asyncio.run(make_bot().tree.commands["campagne"](inter, types.SimpleNamespace(value="pack"), session=session,
-                                                     fichier=Att(rows), **kw))
-    return inter
-
-
-def test_pack_copie_dans_le_presse_papiers_partie_par_partie(camp, clipboard):
-    def said(inter):
-        return " ".join(str(x) for x in inter.out)
-    inter = run_pack(camp, minutes=60)
-    text = said(inter)
-    assert "partie 1/3" in text and "Partie suivante" in text and "/campagne pack partie:2" in text and "FIN LUE" in text
-    assert "partie 1 sur 3" in clipboard.text and "Réplique numéro 0." in clipboard.text
-    assert "Réplique numéro 13." not in clipboard.text
-    inter = run_pack(camp, minutes=60, partie=3)
-    assert "partie 3 sur 3" in clipboard.text and "Réplique numéro 13." in clipboard.text
-    assert "integrer" in said(inter)
-    assert "3 partie" in said(run_pack(camp, minutes=60, partie=4))
-
-
-def test_pack_refuse_sans_presse_papiers_mais_reste_possible_en_fichier(camp, monkeypatch):
-    from voicebot import presse_papiers
-    monkeypatch.setattr(presse_papiers, "reason_unavailable", lambda: "aucun presse-papiers sur la machine du bot")
-    inter = run_pack(camp)
-    assert "sortie:fichier" in inter.out[-1] and not (camp.path / "seances" / SID / "pack").exists()
-    inter = run_pack(camp, sortie=types.SimpleNamespace(value="fichier"))
-    assert (camp.path / "seances" / SID / "pack" / "pack.json").exists()
-
-
-def test_integrer_depuis_le_presse_papiers(camp, clipboard):
-    pack.build_packs(camp, ROWS[:3], SID)
-    cmd = make_bot().tree.commands["campagne"]
-    inter = FakeInter()
-    asyncio.run(cmd(inter, types.SimpleNamespace(value="integrer")))                      # presse-papiers vide
-    assert "ne contient pas de texte" in inter.out[0] and not (camp.path / "seances" / SID / "meta.json").exists()
-    clipboard.text = REPONSE.replace("00:00:06", "00:00:05")
-    inter = FakeInter()
-    asyncio.run(cmd(inter, types.SimpleNamespace(value="integrer")))
-    assert "intégrée" in inter.out[0] and (camp.path / "seances" / SID / "meta.json").exists()
-    clipboard.text = "du texte qui n'est pas une réponse"
-    inter = FakeInter()
-    asyncio.run(cmd(inter, types.SimpleNamespace(value="integrer")))
-    assert "❌" in inter.out[0]
-
-
-def test_integrer_refuse_sans_presse_papiers_ni_fichier(camp, monkeypatch):
-    from voicebot import presse_papiers
-    monkeypatch.setattr(presse_papiers, "reason_unavailable", lambda: "le presse-papiers est désactivé")
-    inter = FakeInter()
-    asyncio.run(make_bot().tree.commands["campagne"](inter, types.SimpleNamespace(value="integrer")))
-    assert "`fichier`" in inter.out[0] and "désactivé" in inter.out[0]

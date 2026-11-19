@@ -1,6 +1,6 @@
-"""Assemblage du bot comme dans bot_v4.py : toutes les commandes sont déclarées, le statut est cohérent."""
+"""Assemblage du bot comme dans bot_v7.py : toutes les commandes sont déclarées, le statut est cohérent."""
 from voicebot.client import RecorderBot
-from voicebot.commands import register
+from voicebot.commands import CAMPAGNE_ACTIONS, GLOSSAIRE_ACTIONS, register
 from voicebot.drive import DriveClient
 from voicebot.whisper_engine import WhisperEngine
 
@@ -14,7 +14,9 @@ def build():
 
 def test_commandes_declarees():
     bot, _ = build()
-    assert set(bot.tree.commands) == {"record", "stop", "transcript", "regle", "campagne", "stats", "status", "config", "dire", "retranscrire"}
+    assert set(bot.tree.commands) == {"record", "stop", "transcript", "regle", "campagne", "stats", "status", "config", "dicter", "retranscrire", "glossaire"}
+    assert list(bot.tree.commands["campagne"].subcommands) == CAMPAGNE_ACTIONS
+    assert list(bot.tree.commands["glossaire"].subcommands) == GLOSSAIRE_ACTIONS
     assert bot.tree.error_handler is not None
 
 
@@ -35,7 +37,10 @@ def test_close_all_sans_session():
 def test_limites_discord_sur_les_descriptions():
     """Discord refuse la synchronisation si une description dépasse 100 caractères (ou un nom 32)."""
     bot, _ = build()
-    for name, fn in bot.tree.commands.items():
-        assert len(name) <= 32 and 1 <= len(fn.description) <= 100, name
+    items = dict(bot.tree.commands)
+    for group in [c for c in bot.tree.commands.values() if hasattr(c, "subcommands")]:
+        items.update({f"{group.name} {sub}": fn for sub, fn in group.subcommands.items()})
+    for name, fn in items.items():
+        assert len(name.split()[-1]) <= 32 and 1 <= len(fn.description) <= 100, name
         for param, text in getattr(fn, "param_descriptions", {}).items():
             assert 1 <= len(text) <= 100, f"/{name} {param} : {len(text)} caractères"

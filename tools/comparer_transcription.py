@@ -6,15 +6,25 @@ modifié dans la session : tout est écrit dans <session>/comparaison/.
 Usage :
     python tools/comparer_transcription.py sessions/2026-11-03_214508 --de 00:40:00 --a 01:00:00
     python tools/comparer_transcription.py sessions/2026-11-03_214508 --sans-whisper          (découpage seul, rapide, sans GPU)
-    python tools/comparer_transcription.py sessions/... --variantes actuel,filtre --variante "test=silence_fin_ms:900,fusion_s:1"
+    python tools/comparer_transcription.py sessions/... --variantes actuel,gain --variante "test=silence_fin_ms:900,gain_cible_dbfs:-18"
     python tools/comparer_transcription.py sessions/... --reference extrait_corrige.txt --de 00:40:00 --a 00:45:00
 
-Variantes prédéfinies (chacune ajoute à la précédente) :
-    actuel    réglages de ton config.ini
-    reglages  silence_fin_ms 1100, min_trames_voisees 22, « au revoir / bye / amen » ignorés comme mots isolés
-    filtre    reglages SANS ignorer ces mots, mais rejet de « au revoir / bye / amen / merci » sur un énoncé < 0,6 s
-    fusion    filtre + fusion des énoncés d'un même joueur séparés de moins de 1,2 s
-    contexte  fusion + fin de la phrase précédente du joueur donnée à Whisper comme contexte (selon la version de WhisperX)
+Variantes prédéfinies :
+    actuel      réglages de ton config.ini
+    gain        actuel + gain fixe par joueur (parole amenée à -20 dBFS) : aide les voix basses (seuil de niveau, détection de voix)
+    passehaut   actuel + filtre passe-haut à 80 Hz (retire les grondements)
+    bruit       actuel + débruitage « noisereduce » (à installer : pip install noisereduce) ; refaire avec --variante
+                "dfn=debruitage:deepfilter" pour DeepFilterNet (pip install deepfilternet, non testé ici) ; LENT
+    sansalign   actuel sans l'alignement mot à mot de WhisperX : les débits « impossibles » viennent-ils de l'alignement ?
+    redecoupe   actuel + les énoncés de 10 s et plus dont le texte est long et sans ponctuation finale sont coupés à leur plus
+                longue pause puis retranscrits (gardé seulement si cela améliore) ; la liste est écrite dans redecoupes.txt
+    combine     gain + passehaut + redecoupe
+  Anciennes variantes (chacune ajoute à la précédente) : reglages (silence_fin_ms 1100), filtre (+ rejet des « au revoir » sur un
+  énoncé < 0,6 s), fusion (+ fusion des énoncés d'un même joueur séparés de moins de 1,2 s), contexte (+ fin de la phrase
+  précédente donnée à Whisper).
+Par défaut : actuel,gain,passehaut,redecoupe,sansalign,combine. Les variantes qui modifient l'audio (gain, passehaut, bruit,
+combine) retranscrivent tout : sur une séance de 3 h, essaie d'abord un extrait (--de / --a), par exemple autour de 00:30:00 à
+00:50:00. Les autres réutilisent le cache (cache_whisper.jsonl) et sont presque instantanées.
 
 --reference : un extrait du transcript corrigé à la main (même format que transcript_live.txt) ; le script calcule alors le taux
 d'erreurs (WER) de chaque variante sur cet extrait (utiliser --de / --a sur la même plage).
@@ -44,13 +54,16 @@ def hms(text: str) -> float:
 def main(argv=None, engine=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("session", type=Path, help="dossier de la session (contient audio/ et meta.json)")
-    ap.add_argument("--variantes", default="actuel,reglages,filtre,fusion,contexte", help="liste séparée par des virgules")
+    ap.add_argument("--variantes", default="actuel,gain,passehaut,redecoupe,sansalign,combine", help="liste séparée par des virgules")
     ap.add_argument("--variante", action="append", default=[], metavar="nom=cle:val,cle:val",
                     help="variante personnalisée (répétable), dérivée de « actuel »")
     ap.add_argument("--de", default=None, help="début de l'extrait (hh:mm:ss)")
     ap.add_argument("--a", default=None, help="fin de l'extrait (hh:mm:ss)")
     ap.add_argument("--joueurs", default="", help="noms de joueurs à traiter (séparés par des virgules ; défaut : tous)")
     ap.add_argument("--reference", type=Path, default=None, help="extrait corrigé à la main, pour calculer le WER")
+    ap.add_argument("--avec", type=Path, default=None, metavar="DOSSIER",
+                    help="dossier de résultats d'une autre comparaison (ex. faite avec un autre modèle) : écrit les différences entre les deux "
+                         "pour chaque variante commune (differences_<variante>.md) et leur écart mutuel")
     ap.add_argument("--sans-whisper", action="store_true", help="découpage seul : statistiques d'énoncés, sans transcrire")
     ap.add_argument("--sortie", type=Path, default=None, help="dossier de résultats (défaut : <session>/comparaison)")
     args = ap.parse_args(_args if argv is None else argv)
@@ -97,9 +110,17 @@ def main(argv=None, engine=None) -> int:
     for name, params in chosen.items():
         t = time.monotonic()
         print(f"\n== Variante « {name} » ==")
-        res = rejeu.transcribe_variant(params, tracks, None if args.sans_whisper else engine, window, asr,
-                                       progress=lambda s: print("  ", s), flags_cache=flags_cache, pcm_cache=pcm_cache)
+        try:
+            res = rejeu.transcribe_variant(params, tracks, None if args.sans_whisper else engine, window, asr,
+                                           progress=lambda s: print("  ", s), flags_cache=flags_cache, pcm_cache=pcm_cache)
+        except RuntimeError as e:                      # bibliothèque facultative absente : on passe à la variante suivante
+            print(f"   variante « {name} » ignorée : {e}")
+            continue
         results[name] = res
+        for player, info in res["prep"].items():
+            if "gain_db" in info:
+                print(f"   {player} : parole à {info['niveau_parole_dbfs']} dBFS, gain {info['gain_db']:+.1f} dB"
+                      + (f", {info['ecretes_pct']} % écrêtés" if info["ecretes_pct"] else ""))
         if not args.sans_whisper:
             (out / f"transcript_{name}.txt").write_text(rejeu.transcript_text(res["rows"], f"{session.name} — variante {name}"),
                                                         encoding="utf-8")
@@ -107,6 +128,9 @@ def main(argv=None, engine=None) -> int:
                 wers[name] = rejeu.wer(reference, res["rows"], window)
         print(f"   {res['enonces']} énoncé(s), {len(res['rows'])} ligne(s) gardée(s), {time.monotonic() - t:.0f} s")
 
+    if not results:
+        print("Aucune variante n'a pu être calculée.")
+        return 1
     if args.sans_whisper:
         print("\nÉnoncés produits par le découpage (sans Whisper) :")
         for name, res in results.items():
@@ -127,7 +151,28 @@ def main(argv=None, engine=None) -> int:
         rej += [f"[{rejeu.fmt_ts(r['start'])[:8]}] {name} · {r['name']} · {r['reason']} · {r['utt_s']} s : {r['text']}"
                 for r in res["rejetes"]]
     (out / "rejetes.txt").write_text("\n".join(rej) + "\n", encoding="utf-8")
-    print(f"\nRésultats dans {out} :\n  rapport.md · transcript_<variante>.txt · differences_*.md · rejetes.txt")
+    cuts = []
+    for name, res in results.items():
+        cuts += [f"[{rejeu.fmt_ts(c['start'])[:8]}] {name} · {c['name']} · énoncé de {c['duree']} s\n  AVANT : {c['avant']}\n"
+                 f"  APRÈS : {c['apres']}\n" for c in res["redecoupes"]]
+    if cuts:
+        (out / "redecoupes.txt").write_text("\n".join(cuts), encoding="utf-8")
+    if args.avec:
+        for name, res in results.items():
+            other_file = args.avec / f"transcript_{name}.txt"
+            if not other_file.exists():
+                print(f"   (pas de transcript_{name}.txt dans {args.avec} : variante non comparée)")
+                continue
+            other_rows = rejeu.read_transcript(other_file)
+            diff = rejeu.differences(other_rows, res["rows"])
+            lines = [f"# {args.avec.name} ↔ {out.name} (variante {name}) : fenêtres de 30 s où le texte diffère", ""]
+            for start, a, b, n in diff:
+                lines += [f"## {rejeu.fmt_ts(start)[:8]} ({n} mots d'écart)", f"**{args.avec.name}**", "```", a or "(rien)", "```",
+                          f"**{out.name}**", "```", b or "(rien)", "```", ""]
+            (out / f"differences_{name}.md").write_text("\n".join(lines), encoding="utf-8")
+            print(f"   {name} : {len(diff)} fenêtre(s) différente(s) entre les deux comparaisons, écart mutuel (WER) "
+                  f"{rejeu.wer(other_rows, res['rows'], window)['wer']:.1f} %")
+    print(f"\nRésultats dans {out} :\n  rapport.md · transcript_<variante>.txt · differences_*.md · rejetes.txt · redecoupes.txt (si des énoncés ont été coupés)")
     print("\n" + (out / "rapport.md").read_text(encoding="utf-8"))
     return 0
 

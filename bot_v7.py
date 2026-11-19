@@ -2,7 +2,7 @@
 Bot Discord : enregistre un canal vocal (un fichier WAV par utilisateur), transcrit en quasi temps réel avec
 WhisperX, puis produit en fin de session MP3, rapport PDF, dépôt Google Drive et statistiques.
 
-Point d'entrée : python bot_v4.py [--config chemin/vers/config.ini]
+Point d'entrée : python bot_v7.py [--config chemin/vers/config.ini]
 
 Le code est organisé en composants dans le paquet voicebot/ (voir voicebot/__init__.py). Tous les paramètres
 sont dans config.ini (créé au premier lancement). Le jeton Discord se passe de préférence par la variable

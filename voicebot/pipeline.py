@@ -10,8 +10,7 @@ from pathlib import Path
 
 from .campagne import CampaignError, CampaignStore
 from .config import SET
-from .gemini import GeminiError, api_key
-from .memoire import summarize_session, write_clean_transcript
+from .memoire import write_clean_transcript
 from .drive import DriveClient
 from .mp3 import convert_to_mp3
 from .report import build_report
@@ -87,49 +86,16 @@ def _active_campaign(rec):
         return None
 
 
-def _memoire_step(rec, res, board):
-    """Étape facultative : ne bloque jamais la suite.
-
-    Avec une clé Gemini et `resume_auto` : génération complète (retourne ses résultats). Sinon rien : les packs à coller
-    dans un chat se préparent à la demande avec `/campagne pack`. Retourne le dict de la génération ou None."""
-    info = rec.dir / "campagne.json"
-    use_gemini = SET["campagnes.resume_auto"] and bool(api_key())
-    if not info.exists():
-        board.update("memoire", "skipped", "aucune campagne active")
-        return None
-    if not use_gemini:
-        board.update("memoire", "skipped", "pas de clé Gemini" if SET["campagnes.resume_auto"]
-                     else "à la demande : /campagne pack")
-        return None
-    try:
-        campaign = _active_campaign(rec)
-        if campaign is None:
-            raise CampaignError("campagne introuvable")
-        rows = read_rows(rec.dir / "transcript_live.jsonl")
-        board.update("memoire", "running", "préparation")
-        out = summarize_session(campaign, rows, rec.session_id, lambda t: board.update("memoire", "running", t))
-    except (CampaignError, GeminiError, KeyError, ValueError) as e:
-        board.update("memoire", "failed", str(e).splitlines()[0][:150])
-        res["notes"].append(f"Mémoire de campagne non mise à jour : {e}\nRelance avec `/campagne pack`.")
-        return None
-    except Exception as e:
-        board.update("memoire", "failed", repr(e)[:150])
-        res["notes"].append(f"Mémoire de campagne non mise à jour : {e!r}")
-        return None
-    board.update("memoire", "ok", f"{campaign.titre} — {out['version']}")
-    return {**out, "titre": campaign.titre}
-
-
 PIPELINE_STEPS = [("asr", "Fin de la transcription"), ("transcript", "Transcript et statistiques"),
                   ("mp3", "Conversion MP3"), ("rapport", "Rapport PDF"),
-                  ("memoire", "Mémoire de campagne (Gemini)"), ("drive", "Google Drive")]
+                  ("drive", "Google Drive")]
 
 
 def run_pipeline(rec: "SessionRecorder", live: "LiveTranscriber", cfg: dict, board: StatusBoard,
                  drive: DriveClient) -> dict:
     """Exécute les étapes l'une après l'autre. Une étape en échec n'empêche pas les suivantes."""
     res = {"stats": None, "transcript": None, "mp3": [], "report": None,
-           "link": None, "shared": False, "notes": [], "memoire": None, "transcript_clean": None}
+           "link": None, "shared": False, "notes": [], "transcript_clean": None}
 
     # 1. fin de la transcription : on laisse WhisperX vider sa file
     board.update("asr", "running")
@@ -189,10 +155,7 @@ def run_pipeline(rec: "SessionRecorder", live: "LiveTranscriber", cfg: dict, boa
         except Exception as e:
             board.update("rapport", "failed", str(e)[:150])
 
-    # 5. mémoire de campagne : compte rendu, résumé global, « précédemment »
-    res["memoire"] = _memoire_step(rec, res, board)
-
-    # 6. Google Drive
+    # 5. Google Drive (la mémoire de campagne se fait à la demande : /campagne resumer)
     if cfg["drive"]:
         files = []
         if cfg["drive_transcript"]:
@@ -203,8 +166,6 @@ def run_pipeline(rec: "SessionRecorder", live: "LiveTranscriber", cfg: dict, boa
                 files.append((res["transcript"], None))       # brut : seulement en secours ou sur demande
         if cfg["drive_rapport"] and res["report"]:
             files.append((res["report"], None))
-        if cfg["drive_transcript"] and res["memoire"]:
-            files.append((res["memoire"]["seance"] / "compte_rendu.md", None))
         if cfg["drive_audio"]:
             audio = res["mp3"] if cfg["mp3"] else sorted((rec.dir / "audio").glob("*.wav"))
             files += [(p, "audio") for p in audio]

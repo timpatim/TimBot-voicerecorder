@@ -50,6 +50,24 @@ def install():
             self.error_handler = fn
             return fn
 
+        def add_command(self, group):
+            self.commands[group.name] = group
+
+    class Group:
+        """Groupe de sous-commandes. Dans les tests, `group(inter, action, **kw)` appelle la sous-commande `action.value`."""
+        def __init__(self, name, description="", guild_only=False):
+            self.name, self.description, self.subcommands = name, description, {}
+
+        def command(self, name, description=""):
+            def deco(fn):
+                fn.description = description
+                self.subcommands[name] = fn
+                return fn
+            return deco
+
+        async def __call__(self, inter, action, **kw):
+            return await self.subcommands[action.value](inter, **kw)
+
     class Generic:
         def __class_getitem__(cls, item):
             return cls
@@ -57,7 +75,7 @@ def install():
         def __init__(self, *args, **kwargs):
             pass
 
-    a.CommandTree, a.AppCommandError = Tree, Exception
+    a.CommandTree, a.AppCommandError, a.Group = Tree, Exception, Group
     class Choice(Generic):
         def __init__(self, name=None, value=None):
             self.name, self.value = name, value
@@ -70,6 +88,14 @@ def install():
         return deco
 
     a.describe = describe
+
+    def autocomplete(**kwargs):
+        def deco(fn):
+            fn.autocompletes = {**getattr(fn, "autocompletes", {}), **kwargs}
+            return fn
+        return deco
+
+    a.autocomplete = autocomplete
     a.rename = lambda **kwargs: (lambda fn: fn)
     a.choices = a.guild_only = lambda *args, **kwargs: (lambda fn: fn)
     d.app_commands = a

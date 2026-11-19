@@ -1,4 +1,4 @@
-"""Campagnes de jeu de rôle : dossier par campagne, campagne active, joueurs, contexte (généré avec Gemini).
+"""Campagnes de jeu de rôle : dossier par campagne, campagne active, joueurs, contexte (généré avec Claude).
 
 Module indépendant de Discord. Arborescence d'une campagne :
 
@@ -10,7 +10,7 @@ Module indépendant de Discord. Arborescence d'une campagne :
         sources/  seances/  resume_global/
     campagnes/_active.json  campagne active
 
-Les secrets ne sont jamais déduits : Gemini propose un classement, le MJ le valide (cf. PROMPT_CONTEXTE).
+Les secrets ne sont jamais déduits : Claude propose un classement, le MJ le valide (cf. PROMPT_CONTEXTE).
 """
 import json
 import re
@@ -18,8 +18,7 @@ import unicodedata
 from datetime import datetime
 from pathlib import Path
 
-from . import gemini
-from .gemini import GeminiError
+from . import claude_cli
 
 TEMPLATE_MARK = "<!-- modèle non rempli : supprime cette ligne quand tu as complété le fichier -->"
 SUBDIRS = ("sources", "seances", "resume_global")
@@ -84,9 +83,25 @@ class Campaign:
             return False
         return bool(text.strip()) and TEMPLATE_MARK not in text
 
-    def nb_seances(self) -> int:
+    def _seances_integrees(self) -> list:
+        """Types des séances intégrées ('' = séance jouée, 'chapitre' / 'livre' = condensé) ; les dossiers sans meta.json
+        (analyse en cours, séance non intégrée) ne comptent pas."""
         d = self.path / "seances"
-        return sum(1 for p in d.iterdir() if p.is_dir() and not p.name.startswith("_")) if d.is_dir() else 0
+        if not d.is_dir():
+            return []
+        return [_read_json(p / "meta.json", {}).get("type", "") for p in d.iterdir()
+                if p.is_dir() and not p.name.startswith("_") and (p / "meta.json").exists()]
+
+    def nb_seances(self) -> int:
+        """Séances jouées et intégrées (sans les condensés)."""
+        return sum(1 for t in self._seances_integrees() if t not in ("chapitre", "livre"))
+
+    def nb_condenses(self) -> int:
+        return sum(1 for t in self._seances_integrees() if t in ("chapitre", "livre"))
+
+    def seances_texte(self) -> str:
+        n, k = self.nb_seances(), self.nb_condenses()
+        return f"{n} séance(s)" + (f", {k} condensé(s)" if k else "")
 
     def resume_global(self) -> Path | None:
         p = self.path / "resume_global.md"
@@ -326,17 +341,21 @@ def rollback(campaign: Campaign) -> tuple:
     (campaign.path / "resume_global.md").write_text(previous.read_text(encoding="utf-8"), encoding="utf-8")
     session = None
     seances = campaign.path / "seances"
-    for meta in (sorted(seances.glob("*/meta.json")) if seances.is_dir() else []):
-        if _read_json(meta, {}).get("version") == undone.name:
-            session, src = meta.parent.name, meta.parent
+    for meta in (sorted(seances.glob("*/meta.json")) if seances.is_dir() else []):      # une condensation peut avoir créé plusieurs dossiers
+        info = _read_json(meta, {})
+        if info.get("version") == undone.name:
+            name, src = meta.parent.name, meta.parent
+            session = session or name
             gone = seances / "_annulees"
             gone.mkdir(exist_ok=True)
-            dest, k = gone / session, 1
+            dest, k = gone / name, 1
             while dest.exists():
                 k += 1
-                dest = gone / f"{session}_{k}"
+                dest = gone / f"{name}_{k}"
             src.rename(dest)
-            break
+            if info.get("type") not in ("chapitre", "livre"):
+                from . import glossaire
+                glossaire.retirer(campaign.path, dest, name)               # les entrées de glossaire apprises pendant cette séance
     return undone.name, previous.name, session
 
 
@@ -386,7 +405,7 @@ def parse_contexte_response(text: str) -> tuple:
     """-> (markdown, liste [{'pseudo','personnage'}]). Lève CampaignError si le format n'est pas respecté."""
     m = re.search(r"=== CONTEXTE ===\s*(.*?)\s*=== JOUEURS ===\s*(.*)\Z", text, re.S)
     if not m:
-        raise CampaignError("Réponse de Gemini inexploitable (format inattendu) : réessaie.")
+        raise CampaignError("Réponse de Claude inexploitable (format inattendu) : réessaie.")
     markdown, raw = m.group(1).strip(), m.group(2).strip()
     raw = re.sub(r"^```(?:json)?|```$", "", raw, flags=re.M).strip()
     try:
@@ -413,12 +432,15 @@ def apply_mapping(joueurs: dict, mapping: list) -> int:
 
 
 def generate_contexte(campaign: Campaign, brut: str) -> dict:
-    """Appel bloquant à Gemini (à lancer dans un thread). Écrit contexte.md (ou contexte_propose.md si le MJ a déjà
+    """Appel bloquant à Claude (à lancer dans un thread). Écrit contexte.md (ou contexte_propose.md si le MJ a déjà
     rempli le sien) et complète les personnages de joueurs.json. -> {'fichier', 'remplis', 'total'}."""
     joueurs = campaign.joueurs()
     pseudos = ", ".join(sorted({p for j in joueurs["joueurs"] for p in j["pseudos"]})) or "(inconnus)"
     instruction = PROMPT_CONTEXTE.format(jeu=campaign.jeu or "jeu non précisé", pseudos=pseudos, titre=campaign.titre)
-    answer = gemini.generate(instruction, brut, temperature=0.2, web_search=False)
+    try:
+        answer = claude_cli.ask(instruction + "\n\n<texte>\n" + brut.strip() + "\n</texte>").texte
+    except claude_cli.ClaudeError as e:
+        raise CampaignError(str(e)) from e
     markdown, mapping = parse_contexte_response(answer)
     target = campaign.contexte_path if not campaign.contexte_rempli() else campaign.path / "contexte_propose.md"
     target.write_text(markdown + "\n", encoding="utf-8")
@@ -428,5 +450,5 @@ def generate_contexte(campaign: Campaign, brut: str) -> dict:
     return {"fichier": target.name, "remplis": filled, "total": len(joueurs["joueurs"])}
 
 
-__all__ = ["Campaign", "CampaignError", "CampaignStore", "GeminiError", "slugify", "build_joueurs",
+__all__ = ["Campaign", "CampaignError", "CampaignStore", "slugify", "build_joueurs",
            "contexte_template", "set_mj", "split_sections", "find_section", "add_player", "contexte_personnages", "match_personnage", "versions", "add_version", "rollback", "import_journal", "parse_contexte_response", "apply_mapping", "generate_contexte"]

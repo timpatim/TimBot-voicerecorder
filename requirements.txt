@@ -7,6 +7,7 @@ discord.py[voice]
 discord-ext-voice-recv @ git+https://github.com/rdphillips7/discord-ext-voice-recv.git@6c090d2
 
 numpy
+scipy
 whisperx
 webrtcvad-wheels
 reportlab

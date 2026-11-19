@@ -19,7 +19,7 @@ DEFAULT_HALLUCINATIONS = r"sous-?titr|amara\.org|merci d['’]avoir regard|abonn
 
 SECTION_TITLES = {
     "discord": "Discord",
-    "modeles": "Modèles téléchargés (Whisper, OmniVoice, Chatterbox...)",
+    "modeles": "Modèles téléchargés (Whisper, OmniVoice...)",
     "sessions": "Enregistrements",
     "audio": "Archivage audio",
     "vad": "Détection de voix (VAD) et découpage en énoncés",
@@ -30,10 +30,10 @@ SECTION_TITLES = {
     "fin_de_session": "Traitement de fin de session (modifiable avec /config pour les étapes)",
     "mp3": "Conversion MP3",
     "drive": "Google Drive",
-    "regles": "Google Gemini : questions de règles (/regle) et génération du contexte de campagne (/campagne)",
+    "regles": "Google Gemini : questions de règles (/regle)",
     "campagnes": "Campagnes de jeu de rôle (commande /campagne)",
     "claude": "Claude (ton abonnement, via le programme `claude`) : résumés de campagne avec /campagne resumer",
-    "voix": "Voix du bot (OmniVoice ou Chatterbox) : « Dans l'épisode précédent… » dicté dans le canal vocal",
+    "voix": "Voix du bot (OmniVoice) : « Dans l'épisode précédent… » dicté dans le canal vocal",
 }
 
 # (section.clé, type, défaut, ancienne variable d'environnement, description)
@@ -44,8 +44,8 @@ SETTINGS = [
      "Identifiant de ton serveur : les commandes apparaissent instantanément (vide = commandes globales, plus lentes)."),
     ("discord.canal_messages", str, "", None,
      "Identifiant du salon texte des messages SYSTÈME et informatifs : suivi du traitement de fin de session, alertes,\n"
-     "une ligne de trace à chaque commande lancée par un joueur, compte rendu et fichiers de /campagne resumer, integrer et\n"
-     "pack sortie:fichier. Les réponses aux demandes (/regle, /transcript, /stats, /campagne afficher...) restent dans le salon\n"
+     "une ligne de trace à chaque commande lancée par un joueur, compte rendu de /campagne resumer et condenser.\n"
+     "Les réponses aux demandes (/regle, /transcript, /stats, /campagne afficher...) restent dans le salon\n"
      "où la commande est tapée. Vide = tout dans le salon de la commande (pas de trace). Pour l'obtenir : Paramètres\n"
      "Discord > Avancés > Mode développeur, puis clic droit sur le salon > Copier l'identifiant du salon.\n"
      "Le bot doit pouvoir y voir le salon, écrire et intégrer des liens."),
@@ -134,27 +134,24 @@ SETTINGS = [
     ("drive.attente_connexion_s", int, 180, None, "Attente maximale (s) de la connexion Google avant échec de l'étape."),
     ("drive.taille_bloc_mo", int, 8, None, "Taille des blocs d'envoi (Mo)."),
     ("voix.activer", bool, False, None,
-     "Active la voix du bot (nécessite install_voix.bat). Désactivée : aucune synthèse vocale, aucune lecture."),
+     "Active la voix du bot (nécessite install_omnivoice.bat). Désactivée : aucune synthèse vocale, aucune lecture."),
     ("voix.liberer_whisper", bool, False, None,
      "oui : Whisper est retiré de la mémoire (GPU) pendant une synthèse vocale puis rechargé, pour ne jamais avoir les deux\n"
-     "modèles en même temps ; la synthèse, /dire et /campagne audio sont alors refusés pendant un enregistrement.\n"
+     "modèles en même temps ; la synthèse, /dicter et /campagne audio sont alors refusés pendant un enregistrement.\n"
      "non : Whisper reste chargé, la transcription continue et la voix fonctionne aussi pendant un enregistrement, mais\n"
      "il faut assez de mémoire GPU pour les deux (voir la ligne de mémoire GPU dans la console)."),
     ("voix.au_demarrage", bool, True, None,
      "Au /record, le bot dicte dans le canal vocal le « précédemment » de la dernière séance (audio préparé à l'avance)."),
-    ("voix.moteur", str, "omnivoice", None,
-     "Moteur de synthèse : omnivoice (install_omnivoice.bat) ou chatterbox (install_voix.bat). Changer de moteur invalide\n"
-     "les audios déjà préparés."),
     ("voix.python", str, "", None,
-     "Python de l'environnement de la voix (vide = celui écrit par l'installeur du moteur choisi, sinon celui du bot)."),
+     "Python de l'environnement de la voix (vide = celui écrit par install_omnivoice.bat, sinon celui du bot)."),
     ("voix.langue", str, "fr", None, "Langue lue (code à deux lettres : fr, en, es...)."),
     ("voix.dossier", str, "voix", None,
      "Dossier commun des voix du bot : un échantillon audio (~10 s) par voix, nommé voix.<nom>.wav (ou .mp3, .flac). Avec "
      "OmniVoice, voix.<nom>.txt donne la transcription de l'échantillon ; sans lui, OmniVoice la devine avec Whisper. La "
-     "voix d'une campagne se choisit avec /voix, une voix ponctuelle avec le paramètre nom_voix de /dire et /campagne audio. "
+     "voix d'une campagne se choisit avec /campagne voix, une voix ponctuelle avec le paramètre nom_voix de /dicter et /campagne audio. "
      "À n'utiliser qu'avec l'accord de la personne dont c'est la voix."),
     ("voix.voix_reference", str, "", None,
-     "Ancien réglage, toujours pris en compte : échantillon par défaut quand la campagne n'a pas de voix choisie (/voix). "
+     "Ancien réglage, toujours pris en compte : échantillon par défaut quand la campagne n'a pas de voix choisie (/campagne voix). "
      "Une campagne peut aussi avoir un voix.wav dans son dossier (ancien système). Vide = voix par défaut du moteur."),
     ("voix.device", str, "", None, "cuda ou cpu (vide = automatique)."),
     ("voix.vitesse", float, 1.0, None,
@@ -162,15 +159,12 @@ SETTINGS = [
      "Entre 0.5 et 2.0."),
     ("voix.pause_s", float, 0.25, None, "Silence (s) entre deux morceaux de texte (avant accélération)."),
     ("voix.etapes", int, 32, None,
-     "OmniVoice : nombre d'étapes de génération (32 = qualité recommandée, 16 = plus rapide). Sans effet avec Chatterbox."),
-    ("voix.temperature", float, 0.6, None,
-     "Chatterbox uniquement. Variabilité de la synthèse (0.8 = défaut de Chatterbox). 0.6 limite les mots farfelus et les bruits ; "
-     "trop bas, la voix devient monotone. Si un audio est raté, relance avec /campagne audio force."),
+     "OmniVoice : nombre d'étapes de génération (32 = qualité recommandée, 16 = plus rapide)."),
     ("voix.mots", int, 110, None,
      "Longueur visée (en mots) du « précédemment » demandé à l'IA dans les prompts. ~110 mots = environ 40 s à voix haute. "
      "Ne change pas un texte déjà écrit."),
     ("voix.dire_max", int, 600, None,
-     "Longueur maximale (caractères) d'un texte dit avec /dire (environ 40 s de voix pour 600 caractères)."),
+     "Longueur maximale (caractères) d'un texte dit avec /dicter (environ 40 s de voix pour 600 caractères)."),
     ("voix.delai_s", int, 900, None, "Temps maximal (s) d'une synthèse vocale."),
     ("campagnes.dossier", str, "campagnes", None,
      "Dossier où sont rangées les campagnes (un sous-dossier par campagne : contexte, joueurs, résumés)."),
@@ -178,23 +172,9 @@ SETTINGS = [
      "Taille maximale (Ko) du texte de contexte qu'on peut envoyer à /campagne contexte."),
     ("campagnes.taille_max_transcript_ko", int, 5000, None,
      "Taille maximale (Ko) d'un transcript joint à /campagne resumer."),
-    ("campagnes.resume_auto", bool, False, None,
-     "À la fin d'une session, génère automatiquement le compte rendu, le résumé global et le « précédemment » (Gemini)."),
-    ("campagnes.presse_papiers", bool, True, None,
-     "/campagne pack copie le pack dans le presse-papiers et /campagne integrer lit la réponse dans le presse-papiers (sans "
-     "fichier). Il s'agit du presse-papiers de la machine qui fait tourner le bot : à mettre sur non si le bot tourne sur "
-     "un autre ordinateur que ton client Discord (utilise alors les fichiers)."),
-    ("campagnes.moteur_resume", str, "claude", None,
-     "Moteur de /campagne resumer : claude (programme `claude` de ton abonnement, voir [claude]) ou gemini (ancienne méthode, "
-     "plusieurs appels, clé Gemini requise)."),
     ("campagnes.pack_fusion_s", float, 10.0, None,
-     "Pack allégé : fusionne les répliques consécutives d'un même locuteur séparées de moins de N secondes (moins de texte à "
+     "Transcript envoyé à Claude : fusionne les répliques consécutives d'un même locuteur séparées de moins de N secondes (moins de texte à "
      "envoyer, donc moins d'usage de l'abonnement ; 0 = aucune fusion). Seule la première réplique d'un bloc garde son horodatage."),
-    ("campagnes.pack_minutes", int, 0, None,
-     "Découpe des packs : durée (minutes) d'une partie, 0 = un seul pack par séance. À activer (ex. 60) si le chat utilisé "
-     "ne lit pas les longs fichiers jusqu'au bout."),
-    ("campagnes.tranche_minutes", int, 30, None, "Durée (minutes) des tranches de transcript analysées une à une."),
-    ("campagnes.delai_attente_s", int, 300, None, "Temps maximal d'attente (s) d'une réponse de Gemini pour la mémoire de campagne."),
     ("claude.commande", str, "claude", None,
      "Programme Claude Code à lancer : « claude » s'il est dans le PATH, sinon son chemin complet. Il doit être connecté à ton "
      "abonnement (ouvre un terminal : `claude`, puis `/login`). Aucune clé d'API n'est utilisée : ANTHROPIC_API_KEY est même "
@@ -209,6 +189,12 @@ SETTINGS = [
     ("claude.options", str, "--safe-mode", None,
      "Options supplémentaires de la ligne de commande (ignore CLAUDE.md, hooks, plugins et réglages perso de ton Claude Code). "
      "Si ta version de Claude Code ne connaît pas --safe-mode (erreur « unknown option »), vide ce réglage ou mets à jour : `claude update`."),
+    ("claude.nettoyage", bool, True, None,
+     "Premier appel à Claude : il corrige les noms et termes mal reconnus du transcript (liste de corrections validée et appliquée par le programme ; l'original reste intact)."),
+    ("claude.questions", bool, True, None,
+     "Claude pose aux joueurs (permission Gérer le serveur) ses questions sur les ambiguïtés du scénario ; leurs réponses servent à une version finale. Sans question : 2 appels (nettoyage + analyse), ni nettoyage ni question : 1 appel."),
+    ("claude.questions_max", int, 6, None, "Nombre maximal de questions posées aux joueurs."),
+    ("claude.questions_delai_min", int, 30, None, "Attente maximale (minutes) des réponses ; passé ce délai, les questions sans réponse restent « non précisé »."),
     ("regles.activer", bool, True, None, "Active la commande /regle."),
     ("regles.cle_api", str, "", "GEMINI_API_KEY",
      "Clé d'API Google Gemini (https://aistudio.google.com/apikey). Mieux vaut la laisser vide\n"
@@ -265,13 +251,11 @@ CHECKS = {   # clé : (test, message)
     "discord.canal_messages": (lambda v: v == "" or v.isdigit(), "attendu : l'identifiant numérique du salon (ou vide)"),
     "regles.reflexion": (lambda v: v in ("auto", "minimal", "low", "medium", "high"),
                          "attendu : auto, minimal, low, medium ou high"),
-    "voix.moteur": (lambda v: v in ("omnivoice", "chatterbox"), "attendu : omnivoice ou chatterbox"),
     "voix.etapes": (lambda v: 4 <= v <= 128, "attendu : un entier de 4 à 128"),
     "voix.langue": (lambda v: bool(v), "ne peut pas être vide"),
     "voix.device": (lambda v: v in ("", "cuda", "cpu"), "attendu : cuda, cpu ou vide"),
     "voix.vitesse": (lambda v: 0.5 <= v <= 2.0, "attendu : un nombre de 0.5 à 2.0"),
     "voix.pause_s": (lambda v: 0 <= v <= 3, "attendu : un nombre de 0 à 3"),
-    "voix.temperature": (lambda v: 0.1 <= v <= 1.5, "attendu : un nombre de 0.1 à 1.5"),
     "voix.mots": (lambda v: 30 <= v <= 400, "attendu : un entier de 30 à 400"),
     "voix.dire_max": (lambda v: 20 <= v <= 3000, "attendu : un entier de 20 à 3000"),
     "voix.delai_s": (lambda v: v >= 30, "attendu : un entier >= 30"),
@@ -279,15 +263,13 @@ CHECKS = {   # clé : (test, message)
     "campagnes.taille_max_brut_ko": (lambda v: 1 <= v <= 2000, "attendu : un entier de 1 à 2000"),
     "campagnes.taille_max_transcript_ko": (lambda v: 1 <= v <= 20000, "attendu : un entier de 1 à 20000"),
     "fin_de_session.nettoyage_fusion_s": (lambda v: 0 <= v <= 60, "attendu : un nombre de 0 à 60"),
-    "campagnes.pack_minutes": (lambda v: v == 0 or 15 <= v <= 240, "attendu : 0 (pas de découpe) ou un entier de 15 à 240"),
-    "campagnes.moteur_resume": (lambda v: v in ("claude", "gemini"), "attendu : claude ou gemini"),
     "campagnes.pack_fusion_s": (lambda v: 0 <= v <= 60, "attendu : un nombre de 0 à 60"),
     "claude.commande": (lambda v: bool(v), "ne peut pas être vide"),
     "claude.modele": (lambda v: bool(v), "ne peut pas être vide"),
     "claude.effort": (lambda v: v in ("low", "medium", "high", "xhigh", "max"), "attendu : low, medium, high, xhigh ou max"),
     "claude.delai_s": (lambda v: v >= 60, "attendu : un entier >= 60"),
-    "campagnes.tranche_minutes": (lambda v: 5 <= v <= 120, "attendu : un entier de 5 à 120"),
-    "campagnes.delai_attente_s": (lambda v: v >= 30, "attendu : un entier >= 30"),
+    "claude.questions_max": (lambda v: 1 <= v <= 10, "attendu : un entier entre 1 et 10"),
+    "claude.questions_delai_min": (lambda v: v >= 1, "attendu : un entier >= 1"),
     "regles.question_max": (lambda v: v >= 50, "attendu : un entier >= 50"),
     "regles.nb_phrases": (lambda v: 1 <= v <= 50, "attendu : un entier de 1 à 50"),
     "regles.temperature": (lambda v: 0 <= v <= 2, "attendu : un nombre de 0 à 2"),

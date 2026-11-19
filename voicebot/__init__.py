@@ -16,8 +16,15 @@ Dépendances (chaque module ne dépend que de ceux qui le précèdent) :
     drive         Google Drive
     rules         questions de règles (Google Gemini)
     pipeline      traitement de fin de session + suivi dans le chat
+    campagne      campagnes : joueurs, contexte, versions du résumé global
+    memoire       règles communes des prompts, séances, « précédemment »
+    claude_cli    appel du programme `claude` (abonnement)
+    pack, analyse, fusion   résumé d'une séance (/campagne resumer)
+    glossaire, glossaire_corr   glossaire appris et sa correction
+    condenser     chapitres et livres du résumé global
+    voix          voix du bot (OmniVoice)
     client        client Discord (sessions, statut de présence)
     commands      commandes slash
 """
 
-__version__ = "4"
+__version__ = "7"
